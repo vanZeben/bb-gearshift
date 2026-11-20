@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="t d">
+  <title id="t">Gearshift architecture</title>
+  <desc id="d">The app (composer pill and popup, new-thread banner, routing policy editor, analytics page) talks to the server over RPC and a realtime channel. The server (dispatch hook, event listeners, RPC handlers, CLI and skill) calls pure modules in lib/ (classify, policy, gears, router, analytics, pricing), keeps decisions in its own SQLite database, and holds and amends messages on the bb server, which sends it events back.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b0f17"/><stop offset="1" stop-color="#171d29"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#56606d"/></marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f5b041"/></marker>
+  </defs>
+  <rect width="1280" height="640" rx="20" fill="url(#bg)"/>
+  <g font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <rect x="40" y="60" width="320" height="520" rx="16" fill="#121823" stroke="#2a313c"/>
+    <text x="60" y="90" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">APP · IN THE BB UI</text>
+    <rect x="60" y="110" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="200" y="147.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Composer pill + popup</text>
+    <rect x="60" y="190" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="200" y="227.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">New-thread banner</text>
+    <rect x="60" y="270" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="200" y="297.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Routing policy editor</text>
+    <text x="200" y="317.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">(Settings)</text>
+    <rect x="60" y="350" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="200" y="377.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Analytics page</text>
+    <text x="200" y="397.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">(sidebar)</text>
+    <text x="200" y="556" font-size="13" fill="#6e7681" text-anchor="middle">app.tsx · components/ · hooks/</text>
+    <rect x="480" y="60" width="320" height="520" rx="16" fill="#121823" stroke="#2a313c"/>
+    <text x="500" y="90" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">SERVER · IN THE BB SERVER</text>
+    <rect x="500" y="110" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="640" y="147.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">message.dispatch hook</text>
+    <rect x="500" y="190" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="640" y="217.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Events: message.queued,</text>
+    <text x="640" y="237.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">thread.idle, thread.deleted</text>
+    <rect x="500" y="270" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="640" y="307.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">RPC handlers</text>
+    <rect x="500" y="350" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="640" y="377.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">bb gearshift CLI</text>
+    <text x="640" y="397.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">+ agent skill</text>
+    <rect x="500" y="452" width="280" height="64" rx="12" fill="#1c2330" stroke="#2f3846" stroke-dasharray="5 4"/>
+    <text x="640" y="479.9" font-size="14" font-weight="400" fill="#e6edf3" text-anchor="middle">Plugin SQLite (store.ts)</text>
+    <text x="640" y="498.1" font-size="14" font-weight="400" fill="#e6edf3" text-anchor="middle">decisions · prefs · links</text>
+    <text x="640" y="556" font-size="13" fill="#6e7681" text-anchor="middle">server.ts</text>
+    <rect x="920" y="60" width="320" height="330" rx="16" fill="#121823" stroke="#2a313c"/>
+    <text x="940" y="90" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">PURE LOGIC · LIB/</text>
+    <rect x="940" y="106" width="280" height="46" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1080" y="134.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">classify.ts · score, tier</text>
+    <rect x="940" y="160" width="280" height="46" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1080" y="188.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">policy.ts · defaults, merge</text>
+    <rect x="940" y="214" width="280" height="46" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1080" y="242.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">gears.ts · model, effort</text>
+    <rect x="940" y="268" width="280" height="46" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1080" y="296.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">router.ts · decision rules</text>
+    <rect x="940" y="322" width="280" height="46" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1080" y="350.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">analytics.ts · pricing.ts</text>
+    <rect x="920" y="430" width="320" height="150" rx="16" fill="#1c2330" stroke="#f5b041"/>
+    <text x="1080" y="493.8" font-size="16" font-weight="600" fill="#e6edf3" text-anchor="middle">bb server</text>
+    <text x="1080" y="526.7" font-size="13" font-weight="400" fill="#8b949e" text-anchor="middle">threads · queue · providers</text>
+    <path d="M362 290 L478 290" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M478 318 L362 318" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="420" y="276" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">RPC</text>
+    <text x="420" y="344" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">realtime</text>
+    <path d="M802 225 L918 225" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="860" y="211" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">calls</text>
+    <path d="M802 490 L918 490" fill="none" stroke="#f5b041" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+    <path d="M918 518 L802 518" fill="none" stroke="#f5b041" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+    <text x="860" y="474" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">hold · amend</text>
+    <text x="860" y="544" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">events</text>
+  </g>
+</svg>

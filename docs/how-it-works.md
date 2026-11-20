@@ -18,42 +18,8 @@ Gearshift is a standard bb plugin: a server entry that runs inside the bb server
 entry that renders inside the bb UI. They talk over the plugin's typed RPC and one realtime
 channel.
 
-```mermaid
-flowchart TB
-    subgraph app["App (app.tsx, components/, hooks/)"]
-        pill["Composer pill + popup"]
-        banner["New-thread banner"]
-        editor["Routing policy editor<br/>(Settings)"]
-        page["Analytics page<br/>(sidebar)"]
-    end
-    subgraph server["Server (server.ts)"]
-        hook["message.dispatch hook"]
-        events["Event listeners<br/>message.queued · thread.idle · thread.deleted"]
-        rpc["RPC handlers"]
-        cli["bb gearshift CLI"]
-    end
-    subgraph lib["Pure modules (lib/)"]
-        classify["classify.ts<br/>text → score, tier, signals"]
-        policy["policy.ts<br/>defaults, merge, validate, compile"]
-        gears["gears.ts<br/>spec → model, effort clamp"]
-        router["router.ts<br/>decision rules"]
-        pricing["pricing.ts"]
-        analytics["analytics.ts"]
-    end
-    store[("store.ts<br/>plugin SQLite")]
-    bb["bb server<br/>threads · queue · providers"]
+<p align="center"><img src="assets/diagrams/architecture.svg" width="100%" alt="Architecture: the app (composer pill and popup, new-thread banner, routing policy editor, analytics page) talks to the server over RPC and a realtime channel. The server (dispatch hook, event listeners, RPC handlers, CLI and agent skill) calls pure modules in lib/, keeps decisions in its own SQLite database, and holds and amends messages on the bb server, which sends it events."></p>
 
-    app <-->|"RPC + realtime"| rpc
-    hook --> router --> classify
-    router --> gears
-    classify --> policy
-    hook <--> bb
-    events <--> bb
-    hook --> store
-    events --> store
-    rpc --> store
-    rpc --> analytics --> pricing
-```
 
 Everything in `lib/` is pure and synchronous where it can be, and is where most of the tests
 live. `server.ts` wires those modules to bb: it registers the hook, the event listeners, the
@@ -65,27 +31,8 @@ bb asks every plugin hook about each message before it reaches a provider
 (`bb.experimental_hooks.on("message.dispatch")`). A hook can answer `proceed`, `wait` or
 `reject`, but it can't edit the message. Gearshift therefore shifts gears in three steps:
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as You
-    participant B as bb server
-    participant G as Gearshift
-    participant P as Provider
+<p align="center"><img src="assets/diagrams/sequence.svg" width="100%" alt="Shifting a message, step by step: you send a message; bb asks Gearshift's dispatch hook; Gearshift scores it 9, large, Opus at high effort, and answers wait; bb stores the message as a queued row and emits message.queued; Gearshift updates the row to Opus at high effort and asks bb to recheck; bb re-asks the hook and Gearshift answers proceed; bb starts the turn on Opus."></p>
 
-    U->>B: send "port the billing service into a plugin"
-    B->>G: message.dispatch (requested: Sonnet · high)
-    G->>G: score 9 → large → Opus · high
-    G-->>B: wait ("Shifting to Opus 5.5 · high")
-    B->>B: store the message as a queued row
-    B--)G: message.queued (row id)
-    G->>G: link the row to its decision
-    G->>B: queuedMessages.update(row, model: Opus, effort: high)
-    G->>B: recheck("message.dispatch")
-    B->>G: message.dispatch (re-attempt of the row)
-    G-->>B: proceed (already decided)
-    B->>P: start the turn on Opus 5.5 · high
-```
 
 - A queued row is sent with its **own** model and reasoning level, so amending the row is
   what changes the turn's model.
@@ -132,15 +79,8 @@ requests. Decisions older than the retention setting (90 days by default) are de
 
 ## Analytics
 
-```mermaid
-flowchart LR
-    D["Decision recorded<br/>(dispatch hook)"] --> I["thread.idle"]
-    I --> U["Latest thread/tokenUsage/updated event<br/>usage of the finished turn"]
-    U --> C["Cost at public list prices<br/>for the routed model"]
-    U --> T["Same usage at the provider's<br/>top gear"]
-    C --> O["overview RPC → Analytics page"]
-    T --> O
-```
+<p align="center"><img src="assets/diagrams/analytics.svg" width="100%" alt="Analytics: a decision is recorded by the dispatch hook; when the thread goes idle, the finished turn's token usage is priced at list prices for the routed model and for the top gear, and both feed the analytics page."></p>
+
 
 When a thread goes idle, Gearshift reads the finished turn's token usage from bb's thread
 events and attaches it to the decision that started the turn. Cost uses built-in public list

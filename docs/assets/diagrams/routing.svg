@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="t d">
+  <title id="t">How Gearshift routes a message</title>
+  <desc id="d">You send a message. If Gearshift is off for the thread, it is sent as is. A steer, retry or system message is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise Gearshift scores the text from 0 to 14 with local rules, picks the tier's gear for the provider, holds the current gear if this would be a downshift on a long thread, sends as is if already on that gear, and otherwise shifts, then sends.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b0f17"/><stop offset="1" stop-color="#171d29"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#56606d"/></marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f5b041"/></marker>
+  </defs>
+  <rect width="1280" height="640" rx="20" fill="url(#bg)"/>
+  <g font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="48" y="44" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">HOW GEARSHIFT ROUTES A MESSAGE</text>
+    <path d="M265 210 L335 210" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M565 210 L635 210" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="600" y="200" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">yes</text>
+    <path d="M865 210 L935 210" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="900" y="200" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">no</text>
+    <path d="M450 173 L450 112" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="462" y="150" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">no</text>
+    <path d="M750 173 L750 112" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="762" y="150" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">yes</text>
+    <path d="M1050 173 L1050 112" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="1062" y="150" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">yes</text>
+    <path d="M1050 247 L1050 413" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="1062" y="335" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">no</text>
+    <path d="M935 450 L865 450" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M635 450 L565 450" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M335 450 L265 450" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="300" y="440" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">no</text>
+    <path d="M450 487 L450 552" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="462" y="518" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">yes</text>
+    <path d="M150 413 L150 350" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="162" y="388" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">yes</text>
+    <path d="M150 487 L150 550" fill="none" stroke="#f5b041" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+    <text x="162" y="518" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">no</text>
+    <rect x="35" y="173" width="230" height="74" rx="37" fill="#1c2330" stroke="#2f3846"/>
+    <text x="150" y="215.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">You send a message</text>
+    <rect x="335" y="173" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="335" y="183" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="450" y="205.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Gearshift on</text>
+    <text x="450" y="225.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">for this thread?</text>
+    <rect x="635" y="173" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="635" y="183" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="750" y="205.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">A steer, retry or</text>
+    <text x="750" y="225.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">system message?</text>
+    <rect x="935" y="173" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="935" y="183" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="1050" y="205.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Names a model, or</text>
+    <text x="1050" y="225.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">picked by hand?</text>
+    <rect x="935" y="413" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1050" y="445.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Score 0–14 from local</text>
+    <text x="1050" y="465.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">rules → tier</text>
+    <rect x="635" y="413" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="750" y="445.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">The tier's gear for this</text>
+    <text x="750" y="465.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">provider: model · effort</text>
+    <rect x="335" y="413" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="335" y="423" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="450" y="445.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">A downshift on a</text>
+    <text x="450" y="465.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">long thread?</text>
+    <rect x="35" y="413" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="35" y="423" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="150" y="445.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Already on</text>
+    <text x="150" y="465.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">that gear?</text>
+    <rect x="375" y="72" width="150" height="40" rx="20" fill="#1c2330" stroke="#2f3846"/>
+    <text x="450" y="97.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Sent as is</text>
+    <rect x="675" y="72" width="150" height="40" rx="20" fill="#1c2330" stroke="#2f3846"/>
+    <text x="750" y="97.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Sent as is</text>
+    <rect x="945" y="72" width="210" height="40" rx="20" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1050" y="97.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Runs on that model</text>
+    <rect x="335" y="552" width="230" height="40" rx="20" fill="#1c2330" stroke="#2f3846"/>
+    <text x="450" y="577.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Holds the current gear</text>
+    <rect x="75" y="310" width="150" height="40" rx="20" fill="#1c2330" stroke="#2f3846"/>
+    <text x="150" y="335.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Sent as is</text>
+    <rect x="35" y="550" width="230" height="44" rx="22" fill="#f5b041" stroke="#f5b041"/>
+    <text x="150" y="577.4" font-size="15" font-weight="600" fill="#1a1205" text-anchor="middle">Shifts, then sends</text>
+    <text x="1232" y="612" font-size="12" fill="#6e7681" text-anchor="end">A shift takes about a tenth of a second. Errors and timeouts send the message as is.</text>
+  </g>
+</svg>

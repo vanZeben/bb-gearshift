@@ -56,6 +56,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p .",
     "build": "bb plugin build",
-    "marketplace:check": "node scripts/marketplace-sync.mjs --dry-run --marketplace \"${MARKETPLACE_DIR:-/tmp/marketplace}\""
+    "marketplace:check": "node scripts/marketplace-sync.mjs --dry-run --marketplace \"${MARKETPLACE_DIR:-/tmp/marketplace}\"",
+    "diagrams": "node scripts/render-diagrams.mjs"
   }
 }
