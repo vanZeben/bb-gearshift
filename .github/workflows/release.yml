@@ -47,7 +47,7 @@ jobs:
           ref: refs/tags/${{ steps.meta.outputs.tag }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -93,7 +93,7 @@ jobs:
           ref: refs/tags/${{ needs.verify.outputs.tag }}
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
