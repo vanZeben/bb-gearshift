@@ -8,6 +8,7 @@ import { CostChart } from "./cost-chart";
 import { ModelMix, TierDistribution, Transitions } from "./distribution";
 import { Kpis } from "./kpis";
 import { RecentDecisions } from "./recent";
+import { SubAgents } from "./subagents";
 
 const RANGES = [7, 30, 90] as const;
 
@@ -78,6 +79,7 @@ export function AnalyticsPage() {
             </div>
             <CostChart daily={data.daily} />
             <Transitions data={data} />
+            <SubAgents data={data.fanout} />
             <RecentDecisions rows={data.recent} />
             <p className="text-xs text-muted-foreground">
               Costs are estimates: each turn's token usage priced at public API list prices, not what a subscription or invoice charges.
