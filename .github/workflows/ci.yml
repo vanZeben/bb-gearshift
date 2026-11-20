@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Install the pinned bb CLI
+        run: npm i -g "bb-app@$(cat .github/bb-version)"
+      - name: Build
+        run: bb plugin build
+      - name: Build from a clean production install
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/clean-build"
+          mkdir -p "$clean"
+          tar --exclude=./node_modules --exclude=./.git --exclude=./dist -cf - . | tar -xf - -C "$clean"
+          cd "$clean"
+          npm ci --omit=dev --ignore-scripts
+          bb plugin build
+      - name: Marketplace listing dry run
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/get-bb/marketplace.git "$RUNNER_TEMP/marketplace"
+          node scripts/marketplace-sync.mjs --dry-run --marketplace "$RUNNER_TEMP/marketplace" | tee "$RUNNER_TEMP/sync.json"

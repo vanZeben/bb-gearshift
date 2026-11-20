@@ -1,0 +1,7 @@
+{
+  "description": "Runs every message on the model and reasoning effort its size calls for, so a quick question stops paying for the top model. A pill in the composer shows which model your draft will run on before you send it, and turns routing off for a thread. Long threads keep their current model, so a short reply never forces a large context to be re-read uncached. Works with Claude Code, Codex and any other provider; a settings editor sets the model, effort and service tier for each message size. Scoring runs as local rules with no extra model call, and an analytics page shows every shift and the estimated savings.",
+  "tags": ["model-routing", "routing", "reasoning-effort", "cost", "tokens", "models", "claude-code", "codex", "analytics"],
+  "category": "agents-and-providers",
+  "secondaryCategories": ["token-usage-and-limits"],
+  "author": { "name": "vanZeben", "github": "vanZeben", "url": "https://github.com/vanZeben" }
+}

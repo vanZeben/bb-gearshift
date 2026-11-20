@@ -1,0 +1,119 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: arc-bb-gearshift
+    steps:
+      - name: Check the release token
+        env:
+          RELEASE_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+        run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::The repository secret GEARSHIFT_RELEASE_TOKEN is not set. See docs/RELEASING.md (Secrets)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Ensure the GitHub CLI
+        run: |
+          if ! command -v gh >/dev/null; then
+            v=2.63.2
+            mkdir -p "$HOME/.local/gh"
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${v}/gh_${v}_linux_amd64.tar.gz" | tar -xz -C "$HOME/.local/gh" --strip-components=1
+            echo "$HOME/.local/gh/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Compute the next version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          current=$(node -p "require('./package.json').version")
+          next=$(CURRENT="$current" node -e '
+            const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(process.env.CURRENT);
+            if (!m) { console.error("package.json version " + process.env.CURRENT + " is not a plain X.Y.Z"); process.exit(1); }
+            let [a, b, c] = m.slice(1).map(Number);
+            const bump = process.env.BUMP;
+            if (bump === "major") { a++; b = 0; c = 0; } else if (bump === "minor") { b++; c = 0; } else { c++; }
+            console.log(`${a}.${b}.${c}`);
+          ')
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse if the release already exists
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v${NEXT}" >/dev/null 2>&1; then
+            echo "::error::Tag v${NEXT} already exists. Pick a different bump or delete the stale release and tag."
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "release/v${NEXT}" >/dev/null 2>&1; then
+            echo "::error::Branch release/v${NEXT} already exists. Merge or delete it first."
+            exit 1
+          fi
+          if gh release view "v${NEXT}" >/dev/null 2>&1; then
+            echo "::error::A release for v${NEXT} already exists."
+            exit 1
+          fi
+
+      - name: Bump the version and open the pull request
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          GH_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "release/v${NEXT}"
+          npm version "$NEXT" --no-git-tag-version
+          git add package.json package-lock.json
+          git commit -m "Release v${NEXT}"
+          git push origin "release/v${NEXT}"
+          gh pr create --base main --head "release/v${NEXT}" \
+            --title "Release v${NEXT}" \
+            --body "Bumps the version to ${NEXT}. Merge this, then publish the draft release v${NEXT}. See docs/RELEASING.md."
+
+      - name: Create the draft release
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${NEXT}" --draft --generate-notes --target main --title "v${NEXT}"
+
+      - name: Summary
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          CURRENT: ${{ steps.version.outputs.current }}
+        run: |
+          {
+            echo "## Release v${NEXT} prepared (from ${CURRENT})"
+            echo
+            echo "1. Merge the pull request **Release v${NEXT}**."
+            echo "2. Open the draft release **v${NEXT}**, edit the notes if you like, and **Publish release**."
+            echo
+            echo "Publishing runs the Release workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
