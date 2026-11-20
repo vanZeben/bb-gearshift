@@ -120,6 +120,8 @@ export const overviewSchema = z.object({
     overBudget: z.number(),
     byRole: z.array(z.object({ role: z.string(), count: z.number(), spent: z.number(), budget: z.number(), over: z.number() })),
     budgetUsed: z.array(z.object({ bucket: z.string(), count: z.number() })),
+    /** Newest 20 runs. */
+    recent: z.array(z.object({ id: z.number(), childThreadId: z.string(), role: z.string(), tier: z.string(), modelLabel: z.string().nullable(), effort: z.string().nullable(), spent: z.number(), budget: z.number(), status: z.string(), startedAt: z.number() })),
   }),
   threadsOff: z.number(),
 });

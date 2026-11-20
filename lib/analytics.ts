@@ -31,7 +31,7 @@ const HIST_BUCKETS = ["0-25%", "25-50%", "50-80%", "80-100%", "over 100%"] as co
 const bucketOf = (f: number) => (f < 0.25 ? 0 : f < 0.5 ? 1 : f < 0.8 ? 2 : f <= 1 ? 3 : 4);
 
 /** Lead (decision turns) versus sub-agent (runs) spend, runs by role, over-budget runs and a budget-used histogram. */
-export function buildFanout(rows: DecisionRow[], runs: RunRow[]): OverviewDto["fanout"] {
+export function buildFanout(rows: DecisionRow[], runs: RunRow[], labels: ReadonlyMap<string, string> = new Map()): OverviewDto["fanout"] {
   const lead = rows.reduce((n, r) => n + (r.input_tokens === null ? 0 : spendTokens({ inputTokens: r.input_tokens ?? 0, outputTokens: r.output_tokens ?? 0, cacheReadTokens: r.cache_read_tokens ?? 0, cacheWriteTokens: r.cache_write_tokens ?? 0 })), 0);
   const role = new Map<string, { count: number; spent: number; budget: number; over: number }>();
   const hist = HIST_BUCKETS.map((bucket) => ({ bucket, count: 0 }));
@@ -49,6 +49,7 @@ export function buildFanout(rows: DecisionRow[], runs: RunRow[]): OverviewDto["f
     leadTokens: lead, subTokens: sub, runs: runs.length, overBudget: over,
     byRole: [...role.entries()].map(([name, e]) => ({ role: name, ...e })).sort((a, b) => b.count - a.count),
     budgetUsed: hist,
+    recent: runs.slice(-20).reverse().map((r) => ({ id: r.id, childThreadId: r.child_thread_id, role: r.role, tier: r.tier, modelLabel: r.model ? modelLabel(r.model, labels) : null, effort: r.effort, spent: r.spent, budget: r.budget, status: r.status, startedAt: r.started_at })),
   };
 }
 
@@ -124,7 +125,7 @@ export function buildOverview(rows: DecisionRow[], days: number, threadsOff: num
     daily: [...daily.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([day, v]) => ({ day, ...v })),
     transitions: [...trans.values()].sort((a, b) => b.count - a.count),
     recent: rows.slice(-50).reverse().map((r) => toDto(r, labels)),
-    fanout: buildFanout(rows, runs),
+    fanout: buildFanout(rows, runs, labels),
     threadsOff,
   };
 }

@@ -51,6 +51,16 @@ describe("buildOverview", () => {
   });
 });
 
+describe("buildFanout", () => {
+  it("lists recent runs newest first with model labels", () => {
+    const run = (id: number, spent: number) => ({ id, parent_thread_id: "p", child_thread_id: `c${id}`, role: "qa", tier: "medium", provider: "claude-code", model: "claude-haiku-5-5", effort: "low", budget: 100, spent, status: "done", started_at: id } as never);
+    const f = buildOverview([], 7, 0, NOW, [run(1, 50), run(2, 120)], new Map([["claude-haiku-5-5", "Haiku 5.5"]])).fanout;
+    expect(f.recent.map((r) => r.id)).toEqual([2, 1]);
+    expect(f.recent[0]).toMatchObject({ modelLabel: "Haiku 5.5", spent: 120, budget: 100, status: "done" });
+    expect(f.overBudget).toBe(1);
+  });
+});
+
 describe("toDto", () => {
   it("maps usage only when present and tolerates bad signals", () => {
     expect(toDto(r()).usage).toBeNull();
