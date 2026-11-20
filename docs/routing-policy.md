@@ -148,6 +148,38 @@ size keeps working when the provider ships a new version.
 - **Service tier** (for example `fast`) is applied only when the chosen model offers it.
   Leave it empty to keep whatever the composer had.
 
+## Teams and sub-agents
+
+Beyond picking the model for the message itself, Gearshift can tell the agent which sub-agents to spawn. For a medium or larger message it appends a short agent-only note (the `routeNotes` switch) naming the team for that tier, and the agent starts sub-agents with the `gearshift_spawn` tool. Each role has its own gear per provider and a token budget per tier; Gearshift nudges a sub-agent at 80% of the budget and stops it at 100%, reporting back to the parent thread.
+
+Default teams:
+
+| Tier | Team | Roles |
+| --- | --- | --- |
+| trivial | answer directly, no sub-agents | none |
+| small | one implementer, run tests directly | implement |
+| medium | implementers on disjoint files + qa + verify | implement, qa, verify |
+| large | lead plans; implementers; qa; review of the diff | implement, qa, review |
+| xlarge | architecture plans first, then the large team | architecture, implement, qa, review |
+
+Default roles on Claude Code (other providers use the size classes `@small`, `@medium`, `@large`) and their budgets in thousands of tokens, trivial / small / medium / large / xlarge:
+
+| Role | Model · effort | Budgets |
+| --- | --- | --- |
+| implement | sonnet · medium (high from medium up) | 80 / 160 / 360 / 700 / 1200 |
+| research | sonnet · medium | 80 / 150 / 250 / 300 / 350 |
+| digest | sonnet · medium | 40 / 60 / 100 / 150 / 150 |
+| explore | haiku · medium | 100 / 150 / 250 / 250 / 250 |
+| qa | haiku · low | 60 / 80 / 120 / 150 / 150 |
+| verify | haiku · medium | 60 / 80 / 120 / 150 / 150 |
+| triage | haiku · medium | 30 / 40 / 60 / 80 / 80 |
+| review | opus · medium | 100 / 150 / 250 / 300 / 300 |
+| lead | opus · medium | 100 / 200 / 300 / 400 / 500 |
+| architecture | fable · high | 450 / 450 / 450 / 500 / 550 |
+| writing | fable · low | 60 / 100 / 150 / 200 / 250 |
+
+A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed.
+
 ## When Gearshift does not shift
 
 Checked in this order; the first that applies decides.

@@ -8,12 +8,21 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ### Added
 
+- Sub-agent routing: policy `teams` (roles per tier) and `roles` (gear per provider, budget per tier), an agent-only route note on medium and larger messages, and the `gearshift_spawn` tool that starts a child thread on a role's gear, including on another provider.
+- Budget guard: a sub-agent is nudged once at 80% of its budget and stopped at 100%, with a run report sent to the parent thread.
+- Teams tab in the Routing policy editor and a Sub-agents card on the analytics page.
+- Setting "Add a team note to medium and larger messages".
 - Project documentation: routing policy guide, internals guide, contributing guide, security
   and support policies, code of conduct, issue and pull request templates.
 - GitHub Sponsors link.
 - Release automation: CI on every pull request, a **Prepare release** workflow that opens the
   version bump and a draft release, and a **Release** workflow that verifies the tag and keeps
   the bb Community marketplace listing in sync.
+
+### Fixed
+
+- Model lists fall back to per-host queries when the plain call fails ("Local host daemon is not initialized").
+- Analytics show one label per model id, grouped by id.
 
 ## [0.1.0] - 2026-11-20
 
