@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="600" viewBox="0 0 1280 600" role="img" aria-labelledby="t d">
+  <title id="t">Gearshift</title>
+  <desc id="d">Automatic model routing for bb. Five example messages and where Gearshift sends them: "thanks!" to Haiku at low effort, "fix the typo in the README" to Sonnet at medium, "the login is flaky" to Sonnet at high, "port the billing service into a plugin" to Opus at high, and "build a plugin: UI, API, data, tests and a PR" to Opus at extra-high effort.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b0f17"/>
+      <stop offset="1" stop-color="#171d29"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f5b041" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#f5b041" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="600" rx="24" fill="url(#bg)"/>
+  <g font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+
+    <!-- Mark: a five-speed shift gate, knob in top gear -->
+    <g transform="translate(80 118) scale(5)" fill="none" stroke="#f0f3f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 4.5v15M12 4.5v15M19 7.5V12H5"/>
+      <circle cx="5" cy="4.5" r="1.9" fill="#f0f3f6" stroke="none"/>
+      <circle cx="12" cy="4.5" r="1.9" fill="#f0f3f6" stroke="none"/>
+      <circle cx="5" cy="19.5" r="1.9" fill="#f0f3f6" stroke="none"/>
+      <circle cx="12" cy="19.5" r="1.9" fill="#f0f3f6" stroke="none"/>
+      <circle cx="19" cy="4.5" r="3" fill="#f5b041" stroke="none"/>
+    </g>
+
+    <text x="78" y="330" font-size="76" font-weight="700" fill="#f0f3f6" letter-spacing="-1.5">Gearshift</text>
+    <text x="80" y="382" font-size="28" fill="#c9d1d9">Every message on the right model.</text>
+    <text x="80" y="424" font-size="18" fill="#8b949e">Automatic model routing for bb, on any provider.</text>
+
+    <g font-size="15" fill="#c9d1d9">
+      <rect x="80" y="462" width="138" height="34" rx="17" fill="#1f2632" stroke="#30363d"/>
+      <text x="149" y="484" text-anchor="middle">Cache-aware</text>
+      <rect x="230" y="462" width="160" height="34" rx="17" fill="#1f2632" stroke="#30363d"/>
+      <text x="310" y="484" text-anchor="middle">No extra model call</text>
+      <rect x="402" y="462" width="118" height="34" rx="17" fill="#1f2632" stroke="#30363d"/>
+      <text x="461" y="484" text-anchor="middle">Open source</text>
+    </g>
+
+    <!-- Routing panel -->
+    <rect x="600" y="70" width="620" height="460" rx="18" fill="#121823" stroke="#2a313c"/>
+    <text x="632" y="112" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">YOU SEND</text>
+    <text x="1016" y="112" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">IT RUNS ON</text>
+
+    <!-- row helper: bubble at x=632, arrow, tier label + chip at x=1040 -->
+    <g font-size="15">
+      <!-- 1 trivial -->
+      <rect x="632" y="134" width="330" height="50" rx="12" fill="#1c2330"/>
+      <text x="652" y="165" fill="#e6edf3">thanks!</text>
+      <path d="M974 159h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1016" y="150" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">TRIVIAL · 0</text>
+      <g transform="translate(1016 160)">
+        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
+      </g>
+      <text x="1082" y="175" fill="#e6edf3" font-weight="600">Haiku · low</text>
+
+      <!-- 2 small -->
+      <rect x="632" y="210" width="330" height="50" rx="12" fill="#1c2330"/>
+      <text x="652" y="241" fill="#e6edf3">fix the typo in the README</text>
+      <path d="M974 235h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1016" y="226" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">SMALL · 3</text>
+      <g transform="translate(1016 236)">
+        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
+      </g>
+      <text x="1082" y="251" fill="#e6edf3" font-weight="600">Sonnet · medium</text>
+
+      <!-- 3 medium -->
+      <rect x="632" y="286" width="330" height="50" rx="12" fill="#1c2330"/>
+      <text x="652" y="317" fill="#e6edf3">the login is flaky</text>
+      <path d="M974 311h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1016" y="302" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">MEDIUM · 8</text>
+      <g transform="translate(1016 312)">
+        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
+      </g>
+      <text x="1082" y="327" fill="#e6edf3" font-weight="600">Sonnet · high</text>
+
+      <!-- 4 large -->
+      <rect x="632" y="362" width="330" height="50" rx="12" fill="#1c2330"/>
+      <text x="652" y="393" fill="#e6edf3">port the billing service into a plugin</text>
+      <path d="M974 387h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1016" y="378" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">LARGE · 9</text>
+      <g transform="translate(1016 388)">
+        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
+      </g>
+      <text x="1082" y="403" fill="#e6edf3" font-weight="600">Opus · high</text>
+
+      <!-- 5 xlarge -->
+      <rect x="632" y="438" width="330" height="50" rx="12" fill="#1c2330"/>
+      <text x="652" y="469" fill="#e6edf3">build a plugin: UI, API, tests and a PR</text>
+      <path d="M974 463h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1016" y="454" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">XLARGE · 14</text>
+      <g transform="translate(1016 464)">
+        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#f5b041"/>
+      </g>
+      <text x="1082" y="479" fill="#e6edf3" font-weight="600">Opus · xhigh</text>
+    </g>
+    <text x="632" y="514" font-size="12" fill="#6e7681">Claude Code defaults. Every gear, signal and band is configurable.</text>
+  </g>
+</svg>
