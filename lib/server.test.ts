@@ -285,8 +285,8 @@ describe("gearshift_spawn", () => {
 describe("budget guard", () => {
   async function guardSetup() {
     let spentInput = 0;
-    const send = vi.fn(async () => ({}));
-    const stop = vi.fn(async () => ({}));
+    const send = vi.fn(async (_a: Record<string, unknown>) => ({}));
+    const stop = vi.fn(async (_a: Record<string, unknown>) => ({}));
     const output = vi.fn(async () => ({ output: "partial work" }));
     const events = { list: async (a: { threadId: string }) => a.threadId === "child-1" ? [{ createdAt: 1, scope: {}, data: { tokenUsage: { total: { inputTokens: spentInput, outputTokens: 0 } } } }] : [] };
     const s = await setup({ threads: { send, stop, output, events } });
