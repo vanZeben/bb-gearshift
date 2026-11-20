@@ -36,6 +36,7 @@ export const decisionSchema = z.object({
   signals: z.array(z.string()),
   requestedModel: z.string().nullable(),
   requestedEffort: z.string().nullable(),
+  requestedLabel: z.string().nullable(),
   routedModel: z.string().nullable(),
   routedEffort: z.string().nullable(),
   routedLabel: z.string().nullable(),
@@ -109,8 +110,17 @@ export const overviewSchema = z.object({
     costUsd: z.number(),
     baselineCostUsd: z.number(),
   })),
-  transitions: z.array(z.object({ from: z.string(), to: z.string(), count: z.number() })), // requested → routed model, shifts only
+  transitions: z.array(z.object({ from: z.string(), to: z.string(), fromLabel: z.string(), toLabel: z.string(), count: z.number() })), // requested → routed model, shifts only
   recent: z.array(decisionSchema), // newest 50
+  /** Sub-agent runs (gearshift_spawn). Spend tokens = input + cache writes + output + 0.1 x cache reads. */
+  fanout: z.object({
+    leadTokens: z.number(),
+    subTokens: z.number(),
+    runs: z.number(),
+    overBudget: z.number(),
+    byRole: z.array(z.object({ role: z.string(), count: z.number(), spent: z.number(), budget: z.number(), over: z.number() })),
+    budgetUsed: z.array(z.object({ bucket: z.string(), count: z.number() })),
+  }),
   threadsOff: z.number(),
 });
 export type OverviewDto = z.infer<typeof overviewSchema>;

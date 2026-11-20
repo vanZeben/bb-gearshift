@@ -44,7 +44,7 @@ export function RecentDecisions({ rows }: { rows: DecisionDto[] }) {
                   </td>
                   <td className="py-1.5 pr-3">{formatTier(d.tier)}</td>
                   <td className="whitespace-nowrap py-1.5 pr-3">
-                    {shortModel(d.requestedModel)} <span className="text-muted-foreground">→</span>{" "}
+                    {d.requestedLabel ?? shortModel(d.requestedModel)} <span className="text-muted-foreground">→</span>{" "}
                     {formatGear(d.routedLabel, d.routedEffort) ?? shortModel(d.routedModel)}
                   </td>
                   <td className="py-1.5 pr-3"><ActionBadge action={d.action} /></td>
