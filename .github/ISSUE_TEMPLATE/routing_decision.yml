@@ -1,0 +1,48 @@
+name: Routing decision
+description: A message ran on a model that seems too big or too small for it.
+labels: [routing]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These reports are how the default policy gets better. Paraphrase the message if it's private; keep the words that matter.
+  - type: textarea
+    id: message
+    attributes:
+      label: The message
+      description: What you sent, or a paraphrase with the same key words.
+    validations:
+      required: true
+  - type: textarea
+    id: explain
+    attributes:
+      label: What `bb gearshift explain` prints
+      description: Run `bb gearshift explain "<message>" --provider <provider>` and paste the output.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model it ran on
+      placeholder: claude-code, Haiku 5.5 · low
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and why
+      description: Which tier or model would have been right for this message?
+    validations:
+      required: true
+  - type: dropdown
+    id: changed
+    attributes:
+      label: Have you changed the routing policy?
+      options:
+        - No, defaults
+        - Yes (describe below)
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else

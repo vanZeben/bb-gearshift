@@ -1,0 +1,39 @@
+name: Bug report
+description: Something doesn't work the way the docs say it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Gearshift and bb versions
+      description: "`bb plugin list` shows both; `bb --version` shows bb."
+      placeholder: gearshift 0.1.0, bb 0.50.1
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      placeholder: claude-code, codex, pi, an ACP agent…
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Relevant lines from `bb plugin logs gearshift`. Remove anything private."
+      render: text

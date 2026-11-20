@@ -1,5 +1,9 @@
 # Gearshift design
 
+> This is the contributor contract: exact schemas, rules and invariants. For a guided tour,
+> read [how-it-works.md](how-it-works.md); for what the routing rules mean to a user, read
+> [routing-policy.md](routing-policy.md).
+
 Gearshift is a bb plugin that routes every message to the right model and reasoning
 effort for its size, on whatever provider the thread runs on. Small asks go to a small,
 fast model; big builds go to the top model with more thinking. It never needs a fork of
