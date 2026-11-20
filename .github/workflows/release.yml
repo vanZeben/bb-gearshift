@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency: release
+
+jobs:
+  verify:
+    runs-on: arc-bb-gearshift
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Check the tag format
+        id: meta
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Tag \"$TAG\" is not vX.Y.Z (optionally with a pre-release suffix)."
+            exit 1
+          fi
+          pre=false
+          if [ "$RELEASE_PRERELEASE" = "true" ] || printf '%s' "$TAG" | grep -q -- '-'; then pre=true; fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "prerelease=$pre"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.meta.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Check the tag matches package.json
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          pkg=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$pkg" ]; then
+            echo "::error::Tag $TAG does not match package.json version $pkg at the tagged commit. Delete this release and the tag $TAG, merge the version bump pull request, then publish the release again. Never move a published tag."
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Install the pinned bb CLI
+        run: npm i -g "bb-app@$(cat .github/bb-version)"
+      - name: Build
+        run: bb plugin build
+      - name: Build from a clean production install
+        run: |
+          set -euo pipefail
+          clean="$RUNNER_TEMP/clean-build"
+          mkdir -p "$clean"
+          tar --exclude=./node_modules --exclude=./.git --exclude=./dist -cf - . | tar -xf - -C "$clean"
+          cd "$clean"
+          npm ci --omit=dev --ignore-scripts
+          bb plugin build
+
+  marketplace:
+    needs: verify
+    if: needs.verify.outputs.prerelease != 'true'
+    runs-on: arc-bb-gearshift
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.verify.outputs.tag }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Ensure the GitHub CLI
+        run: |
+          if ! command -v gh >/dev/null; then
+            v=2.63.2
+            mkdir -p "$HOME/.local/gh"
+            curl -fsSL "https://github.com/cli/cli/releases/download/v${v}/gh_${v}_linux_amd64.tar.gz" | tar -xz -C "$HOME/.local/gh" --strip-components=1
+            echo "$HOME/.local/gh/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Clone the marketplace and generate the entry
+        id: sync
+        run: |
+          set -euo pipefail
+          # Full history: the marketplace build reads entry addition dates from git.
+          git clone https://github.com/get-bb/marketplace.git "$RUNNER_TEMP/marketplace"
+          node scripts/marketplace-sync.mjs --tag "$TAG" --marketplace "$RUNNER_TEMP/marketplace" > "$RUNNER_TEMP/sync.json"
+          cat "$RUNNER_TEMP/sync.json"
+          echo "needs_pr=$(node -p "require('$RUNNER_TEMP/sync.json').needsPullRequest")" >> "$GITHUB_OUTPUT"
+
+      - name: No marketplace change needed
+        if: steps.sync.outputs.needs_pr != 'true'
+        run: |
+          {
+            echo "## Release ${TAG} verified"
+            echo
+            echo "The marketplace entry does not need to change. Users receive ${TAG} through the entry's existing version range with \`bb plugin update\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open the marketplace pull request
+        if: steps.sync.outputs.needs_pr == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The repository secret GEARSHIFT_RELEASE_TOKEN is not set. The marketplace pull request needs it. See docs/RELEASING.md (Secrets)."
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/marketplace"
+          gh auth setup-git
+          gh repo fork get-bb/marketplace --clone=false
+          owner=$(gh api user --jq .login)
+          git remote add fork "https://github.com/${owner}/marketplace.git"
+          branch="gearshift-v${VERSION}"
+          git checkout -b "$branch"
+
+          # Only this plugin's files may change.
+          git add -A -- entries/gearshift.json 'icons/gearshift-*' overview/gearshift.md screenshots/gearshift
+          if [ -n "$(git status --porcelain | grep -v '^[AMDR] ' || true)" ]; then
+            echo "::error::Unexpected changes outside this plugin's files:"
+            git status --porcelain
+            exit 1
+          fi
+          git -c user.name="$owner" -c user.email="${owner}@users.noreply.github.com" commit -m "Update Gearshift to v${VERSION}"
+
+          # The marketplace build reads entry dates from git, so it runs on the committed tree.
+          npm ci --ignore-scripts
+          npm run build
+          npm run check
+
+          git push --force fork "$branch"
+          reasons=$(node -p "require('$RUNNER_TEMP/sync.json').reasons.map((r) => '- ' + r).join('\n')")
+          range=$(node -p "require('$RUNNER_TEMP/sync.json').entry.source.git.range")
+          shots=$(node -p "const s = require('$RUNNER_TEMP/sync.json').entry.screenshots || []; s.length ? s.map((p) => '- \`' + p + '\`').join('\n') : '- none in this update'")
+          files=$(git show --stat --format= HEAD | sed 's/^/    /')
+          body=$(cat <<EOF
+          Updates the Gearshift listing for release ${TAG}.
+
+          **What it does:** routes every bb message to the model and reasoning effort its size calls for, on any provider. See the entry description and \`overview/gearshift.md\`.
+
+          **Why a pull request is needed:**
+          ${reasons}
+
+          **Source:** https://github.com/vanZeben/bb-gearshift.git, range \`${range}\`. Release: ${RELEASE_URL}
+
+          **Plugin checks** (release workflow, at the tag): \`npm test\`, \`npm run typecheck\`, \`bb plugin build\`, and a build from a clean production-only install.
+
+          **Marketplace checks** (this branch): \`npm ci --ignore-scripts\`, \`npm run build\`, \`npm run check\`.
+
+          **Permissions and security:** a standard full-trust bb plugin. It registers a \`message.dispatch\` hook that may briefly hold a message and set its model, reasoning level and service tier on bb's queue, and always lets the message through on any error or timeout. It makes no network requests, needs no account or external service, and stores routing metadata (never message text) in its own SQLite database.
+
+          **Screenshots:**
+          ${shots}
+
+          **Overview:** copied from \`PLUGIN_OVERVIEW.md\` in the plugin repository.
+
+          Changed files:
+          ${files}
+
+          Generated by \`scripts/marketplace-sync.mjs\` in vanZeben/bb-gearshift (\`docs/RELEASING.md\`).
+          EOF
+          )
+          url=$(gh pr create --repo get-bb/marketplace --base main --head "${owner}:${branch}" \
+            --title "Update Gearshift to v${VERSION}" --body "$body")
+          {
+            echo "## Marketplace pull request opened"
+            echo
+            echo "$url"
+            echo
+            echo "$reasons"
+          } >> "$GITHUB_STEP_SUMMARY"
