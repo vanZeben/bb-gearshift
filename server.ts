@@ -22,11 +22,23 @@ const LOOKUP_MS = 1500; // one budget for every lookup the hook makes
 const PROVIDER_MS = 4000;
 const LINK_WINDOW_MS = 2 * 60_000; // a queue row appears right after the hook returns
 const REATTEMPT_LINK_WINDOW_MS = 30 * 60_000;
+const MAX_RUNS_PER_PARENT = 6;
+const MAX_RUNS_GLOBAL = 20;
+const STALE_RUN_MS = 6 * 3_600_000; // an open run this old never reported back
 const POLICY_KEY = "policy-overrides";
 /** Not configurable from the policy editor: prices stay internal, routing switches are plain settings. */
 const NOT_OVERRIDABLE = ["prices", "serviceTierMultipliers", "baselineModel", "routing"] as const;
 type QueuedRow = MessageDispatchHookContext["queuedMessages"][number];
-const rowText = (r: QueuedRow) => r.content.map((b) => ("text" in b ? b.text : "")).join(" ");
+type AnyBlock = { type?: string; text?: string; visibility?: string };
+/** Our own team note, or any agent-only block: never part of what the user asked, so never classified or fingerprinted. */
+const isNoteBlock = (b: AnyBlock) => b.visibility === "agent-only" || (typeof b.text === "string" && b.text.trimStart().startsWith(NOTE_PREFIX));
+const stripNoteText = (t: string) => t.split(/\n{2,}/).filter((seg) => !seg.trimStart().startsWith(NOTE_PREFIX)).join("\n\n");
+const rowText = (r: QueuedRow) => (r.content as AnyBlock[]).filter((b) => typeof b.text === "string" && !isNoteBlock(b)).map((b) => b.text).join(" ");
+/** The user's own text for a dispatch: note and agent-only blocks removed, so a re-attempt never re-classifies our note. */
+const userText = (input: { blocks?: readonly unknown[]; text: string }) => {
+  const texts = ((input.blocks ?? []) as AnyBlock[]).filter((b) => typeof b.text === "string");
+  return texts.length ? texts.filter((b) => !isNoteBlock(b)).map((b) => b.text).join("\n\n") : stripNoteText(input.text);
+};
 const DAY = 86_400_000;
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -265,8 +277,23 @@ export default async function plugin(bb: BbPluginApi) {
 
 
   // ---- teams: route note, spawn, budget guard ------------------------------
-  let spawning = 0;
-  const parentOf = (t: unknown) => (t as { parentThreadId?: string | null }).parentThreadId ?? null;
+  // Spawns in flight: the child's first dispatch can reach the hook before spawn() returns and the run row exists.
+  const pendingSpawns: Array<{ parentThreadId: string; model: string; at: number }> = [];
+  const isPendingSpawn = (parentThreadId: string | null | undefined, model: string | null | undefined) =>
+    !!parentThreadId && pendingSpawns.some((p) => p.parentThreadId === parentThreadId && p.model === model && Date.now() - p.at < 60_000);
+  const failStale = () => { try { store.failStale(Date.now() - STALE_RUN_MS); } catch (e) { bb.log.warn(`stale run sweep failed: ${String(e)}`); } };
+  failStale();
+  const staleTimer = setInterval(failStale, 3_600_000);
+  bb.onDispose(() => clearInterval(staleTimer));
+  const openFor = (parent: string) => store.openRunCount(parent) + pendingSpawns.filter((p) => p.parentThreadId === parent).length;
+  const openAll = () => store.openRunCount() + pendingSpawns.length;
+
+  // Sub-agents never get the spawn tool, and nothing is offered while Gearshift is off for the thread.
+  bb.agents.configure((c) => {
+    const child = !!store.runForChild(c.thread.id) || (!!c.thread.parentThreadId && isPendingSpawn(c.thread.parentThreadId, c.provider.model));
+    const on = cfg.enabled && threadOn(c.thread.id);
+    return { tools: !child && on ? ["gearshift_spawn"] : [], skills: ["gearshift"] };
+  });
 
   /** Catalogs for every provider the team's roles run on (the parent's is passed in). */
   async function catalogsFor(roles: readonly string[], parentProviderId: string, tier: Tier, scope: { environmentId?: string | null; hostId?: string | null; projectId?: string | null }, parentCatalog: CatalogModel[] | null) {
@@ -274,7 +301,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (parentCatalog) out.set(parentProviderId, parentCatalog);
     for (const pid of providersFor(compiled.policy, roles, parentProviderId, tier)) {
       if (out.has(pid)) continue;
-      const c = await catalogFor({ providerId: pid, ...(pid === parentProviderId ? scope : { projectId: scope.projectId }) });
+      const c = await catalogFor({ providerId: pid, ...(pid === parentProviderId ? scope : { hostId: scope.hostId, projectId: scope.projectId }) });
       if (c) out.set(pid, c);
     }
     return out;
@@ -287,31 +314,40 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   interface SpawnResult { ok: true; childThreadId: string; role: string; providerId: string; label: string; effort: string | null; budget: number; tier: Tier }
+  const fail = (error: string) => ({ ok: false as const, error });
   async function spawnRole(parentThreadId: string, roleName: string, prompt: string, title?: string): Promise<SpawnResult | { ok: false; error: string }> {
+    let pending: (typeof pendingSpawns)[number] | null = null;
     try {
+      if (!cfg.enabled || !threadOn(parentThreadId)) return fail("Gearshift is off for this thread, so it cannot spawn sub-agents");
+      if (store.runForChild(parentThreadId)) return fail("A sub-agent cannot spawn sub-agents: report back to the thread that spawned you instead");
+      failStale();
+      if (openFor(parentThreadId) >= MAX_RUNS_PER_PARENT) return fail(`Too many open sub-agents for this thread (limit ${MAX_RUNS_PER_PARENT}): wait for one to report back`);
+      if (openAll() >= MAX_RUNS_GLOBAL) return fail(`Too many open sub-agents overall (limit ${MAX_RUNS_GLOBAL}): wait for some to finish`);
       const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
-      const tier = (store.lastForThread(parentThreadId)?.tier as Tier | null) ?? "medium";
+      const tier = (store.lastNoteworthyTier(parentThreadId) as Tier | null) ?? "medium";
       const target = roleTarget(compiled.policy, roleName, parent.providerId, tier);
-      if (!target) return { ok: false, error: `Unknown role "${roleName}". Roles: ${Object.keys(compiled.policy.roles).join(", ")}` };
-      const catalog = await catalogFor({ providerId: target.providerId, ...(target.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), projectId: parent.projectId });
+      if (!target) return fail(`Unknown role "${roleName}". Roles: ${Object.keys(compiled.policy.roles).join(", ")}`);
+      const hostId = (parent as { hostId?: string | null }).hostId ?? null;
+      const catalog = await catalogFor({ providerId: target.providerId, ...(target.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), hostId, projectId: parent.projectId });
       const r = catalog ? resolveRole(compiled.policy, roleName, parent.providerId, tier, new Map([[target.providerId, catalog]])) : null;
-      if (!r?.gear) return { ok: false, error: `No model for role "${roleName}" on ${target.providerId}` };
-      if (!parent.environmentId) return { ok: false, error: "The calling thread has no environment yet" };
+      if (!r?.gear) return fail(`No model for role "${roleName}" on ${target.providerId}`);
+      if (!parent.environmentId) return fail("The calling thread has no environment yet");
       const g = r.gear;
-      spawning++;
-      let child;
-      try {
-        child = await bb.sdk.threads.spawn({
-          projectId: parent.projectId, environment: { type: "reuse", environmentId: parent.environmentId }, parentThreadId,
-          providerId: target.providerId, model: g.model, ...(g.effort ? { reasoningLevel: g.effort } : {}), ...(g.serviceTier ? { serviceTier: g.serviceTier } : {}),
-          executionInputSources: { providerId: "explicit", model: "explicit", ...(g.effort ? { reasoningLevel: "explicit" as const } : {}), ...(g.serviceTier ? { serviceTier: "explicit" as const } : {}) },
-          title: title ?? `${roleName}`, prompt,
-        } as never);
-      } finally { later(5000, () => { spawning = Math.max(0, spawning - 1); }); }
-      store.insertRun({ parent_thread_id: parentThreadId, child_thread_id: child.id, role: roleName, tier, provider: target.providerId, model: g.model, effort: g.effort, budget: target.budget, started_at: Date.now() });
+      // Re-check after the awaits, then reserve the slot (no await in between).
+      if (openFor(parentThreadId) >= MAX_RUNS_PER_PARENT || openAll() >= MAX_RUNS_GLOBAL) return fail("Too many open sub-agents: wait for one to report back");
+      pending = { parentThreadId, model: g.model, at: Date.now() };
+      pendingSpawns.push(pending);
+      const child = await bb.sdk.threads.spawn({
+        projectId: parent.projectId, environment: { type: "reuse", environmentId: parent.environmentId }, parentThreadId,
+        providerId: target.providerId, model: g.model, ...(g.effort ? { reasoningLevel: g.effort } : {}), ...(g.serviceTier ? { serviceTier: g.serviceTier } : {}),
+        executionInputSources: { providerId: "explicit", model: "explicit", ...(g.effort ? { reasoningLevel: "explicit" as const } : {}), ...(g.serviceTier ? { serviceTier: "explicit" as const } : {}) },
+        title: title ?? `${roleName}`, prompt,
+      } as never);
+      store.insertRun({ parent_thread_id: parentThreadId, child_thread_id: child.id, role: roleName, tier, provider: target.providerId, model: g.model, model_label: g.label, effort: g.effort, budget: target.budget, started_at: Date.now() });
       changed(parentThreadId);
       return { ok: true, childThreadId: child.id, role: roleName, providerId: target.providerId, label: g.label, effort: g.effort, budget: target.budget, tier };
-    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+    } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
+    finally { if (pending) { const i = pendingSpawns.indexOf(pending); if (i >= 0) pendingSpawns.splice(i, 1); } }
   }
   const spawnText = (r: SpawnResult) => `Spawned ${r.role} sub-agent: thread ${r.childThreadId} on ${gearLabel({ model: "", label: r.label, effort: r.effort, serviceTier: null }, r.label)} (${r.providerId}), budget ${formatBudget(r.budget)} tokens. It reports back to you when done.`;
 
@@ -328,34 +364,93 @@ export default async function plugin(bb: BbPluginApi) {
 
   const textInput = (text: string) => [{ type: "text", text, mentions: [] }] as never;
   const clip = (s: string | null, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : "(no output)");
-  /** Check one child against its budget: nudge once at 80%, stop at 100% and report to the parent. Touches only threads in `runs`. */
-  async function guard(childId: string, idle: boolean) {
-    const run = store.runForChild(childId);
-    if (!run || (run.status !== "running" && run.status !== "nudged")) return;
+  type GuardMode = "tick" | "active" | "idle";
+  /** Children being checked right now, and a re-check queued behind a running one (an idle must never be lost). */
+  const inflight = new Set<string>();
+  const rerun = new Map<string, GuardMode>();
+
+  /**
+   * Spend of a child in tokens. The settled total comes from the last tokenUsage event; while a turn runs that
+   * event does not move, so growth in the context window since it is added as an in-turn estimate.
+   */
+  async function childSpend(childId: string): Promise<number | null> {
+    const rows = await bounded(bb.sdk.threads.events.list({ threadId: childId, types: ["thread/tokenUsage/updated", "thread/contextWindowUsage/updated"], order: "desc", limit: "20" }), PROVIDER_MS, []);
+    const usage = rows.find((r) => (r.data as { tokenUsage?: unknown } | undefined)?.tokenUsage);
+    const ctxRows = rows.filter((r) => (r.data as { contextWindowUsage?: unknown } | undefined)?.contextWindowUsage);
+    const total = (usage?.data as { tokenUsage?: { total?: Record<string, number | undefined> } } | undefined)?.tokenUsage?.total;
+    const ctxOf = (r: (typeof rows)[number] | undefined) => (r?.data as { contextWindowUsage?: { usedTokens?: number | null } } | undefined)?.contextWindowUsage?.usedTokens ?? null;
+    let settled: number | null = null;
+    if (total) {
+      const split = total.cacheReadInputTokens !== undefined || total.cacheWriteInputTokens !== undefined;
+      settled = spendTokens({ inputTokens: total.inputTokens ?? 0, outputTokens: total.outputTokens ?? 0, cacheReadTokens: split ? total.cacheReadInputTokens ?? 0 : total.cachedInputTokens ?? 0, cacheWriteTokens: total.cacheWriteInputTokens ?? 0 });
+    }
+    const newest = ctxRows[0];
+    const latestCtx = ctxOf(newest);
+    if (latestCtx === null || !newest) return settled;
+    // In-turn growth: context now versus the context when the settled total was recorded.
+    const base = usage ? ctxRows.find((r) => r.createdAt <= usage.createdAt) : undefined;
+    if (usage && newest.createdAt <= usage.createdAt) return settled;
+    const baseCtx = ctxOf(base);
+    const growth = baseCtx === null ? 0 : Math.max(0, latestCtx - baseCtx);
+    return (settled ?? 0) + (usage ? growth : latestCtx);
+  }
+
+  /**
+   * Check one child against its budget: nudge once at 80%, stop at 100% and report to the parent. Touches only
+   * threads in `runs`. Every transition is claimed in SQL first and acted on only by the caller that won it.
+   */
+  async function guard(childId: string, mode: GuardMode) {
+    if (!store.runForChild(childId)) return;
+    if (inflight.has(childId)) { rerun.set(childId, mode === "tick" ? rerun.get(childId) ?? "tick" : mode); return; }
+    inflight.add(childId);
     try {
-      const rows = await bounded(bb.sdk.threads.events.list({ threadId: childId, types: ["thread/tokenUsage/updated"], order: "desc", limit: "1" }), PROVIDER_MS, []);
-      const total = (rows[0]?.data as { tokenUsage?: { total?: Record<string, number | undefined> } } | undefined)?.tokenUsage?.total;
-      if (total) {
-        const split = total.cacheReadInputTokens !== undefined || total.cacheWriteInputTokens !== undefined;
-        const spent = spendTokens({ inputTokens: total.inputTokens ?? 0, outputTokens: total.outputTokens ?? 0, cacheReadTokens: split ? total.cacheReadInputTokens ?? 0 : total.cachedInputTokens ?? 0, cacheWriteTokens: total.cacheWriteInputTokens ?? 0 });
-        store.patchRun(run.id, { spent });
-        run.spent = spent;
+      let run = store.runForChild(childId);
+      if (!run) return;
+      if (mode === "active" && run.status === "done") {
+        // A resumed child is guarded again.
+        if (store.claimRun(run.id, ["done"], "running", { ended_at: null as never })) { changed(run.parent_thread_id); run = store.runForChild(childId)!; }
+      }
+      if (run.status !== "running" && run.status !== "nudged") return;
+      const spent = await childSpend(childId);
+      run = store.runForChild(childId);
+      if (!run || (run.status !== "running" && run.status !== "nudged")) return;
+      if (spent !== null && spent !== run.spent) { store.patchRun(run.id, { spent }); run.spent = spent; }
+      if (mode === "idle") {
+        // The turn is over: finished, even if it crossed the budget on its last step. Over budget is kept as a flag.
+        const over = run.budget > 0 && run.spent >= run.budget ? 1 : 0;
+        if (store.claimRun(run.id, ["running", "nudged"], "done", { ended_at: Date.now(), over_budget: over })) changed(run.parent_thread_id);
+        return;
       }
       const act = guardAction(run.spent, run.budget, run.status);
       if (act === "nudge") {
-        store.patchRun(run.id, { status: "nudged" }); // before sending: the nudge goes out once
+        if (!store.claimRun(run.id, ["running"], "nudged")) return;
         await bounded(bb.sdk.threads.send({ threadId: childId, mode: "steer-if-active", input: textInput(`${NOTE_PREFIX} Budget at 80%: finish the current step, then report done vs left.`) } as never), PROVIDER_MS, null);
       } else if (act === "stop") {
-        store.patchRun(run.id, { status: "stopped", ended_at: Date.now() });
+        if (!store.claimRun(run.id, ["running", "nudged"], "stopped", { ended_at: Date.now(), over_budget: 1 })) return;
         await bounded(bb.sdk.threads.stop({ threadId: childId }), PROVIDER_MS, null);
         const out = await bounded(bb.sdk.threads.output({ threadId: childId }), PROVIDER_MS, null);
         const report = `${NOTE_PREFIX} run report: ${run.role} sub-agent ${childId} stopped at its budget (${formatBudget(run.spent)}/${formatBudget(run.budget)} tokens). Its last output: ${clip(out?.output ?? null, 1500)}`;
         await bounded(bb.sdk.threads.send({ threadId: run.parent_thread_id, mode: "queue-if-active", input: textInput(report), senderThreadId: childId } as never), PROVIDER_MS, null);
-      } else if (idle) store.patchRun(run.id, { status: "done", ended_at: Date.now() });
+      }
       changed(run.parent_thread_id);
     } catch (e) { bb.log.warn(`budget guard failed: ${String(e)}`); }
+    finally {
+      inflight.delete(childId);
+      const next = rerun.get(childId);
+      if (next && !disposed) { rerun.delete(childId); void guard(childId, next); }
+    }
   }
-  bb.events.on("experimental_thread.events", ({ thread }) => { void guard(thread.id, false); });
+  bb.events.on("experimental_thread.events", ({ thread }) => { void guard(thread.id, "tick"); });
+  bb.events.on("thread.active", ({ thread }) => { void guard(thread.id, "active"); });
+  /** A child that was deleted, archived or crashed will never report: close its run. */
+  const closeRun = (threadId: string) => {
+    try {
+      const run = store.runForChild(threadId);
+      if (run && store.claimRun(run.id, ["running", "nudged"], "failed", { ended_at: Date.now() })) changed(run.parent_thread_id);
+    } catch (e) { bb.log.warn(`close run failed: ${String(e)}`); }
+  };
+  bb.events.on("thread.archived", ({ thread }) => closeRun(thread.id));
+  bb.events.on("thread.failed", ({ thread }) => closeRun(thread.id));
 
   // ---- the hook --------------------------------------------------------
   // Inline first attempt (no queued rows): always a new decision. Re-attempt: rows with a decision of ours
@@ -364,9 +459,12 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       const t0 = Date.now();
       const threadId = ctx.thread.id;
-      // Sub-agents we spawned keep the gear we gave them; our own nudges and reports are never routed.
-      if (store.runForChild(threadId) || ctx.input.text.startsWith(NOTE_PREFIX)
-        || (spawning > 0 && ctx.executionSources.model === "explicit" && !!(ctx.thread as { parentThreadId?: string | null }).parentThreadId)) return { action: "proceed" };
+      // Sub-agents we spawned keep the gear we gave them; our own run reports (sent by a child to its parent) are never routed.
+      const sender = ctx.senderThreadId;
+      const ourReport = ctx.input.text.startsWith(NOTE_PREFIX) && typeof sender === "string" && store.runForChild(sender)?.parent_thread_id === threadId;
+      if (store.runForChild(threadId) || ourReport
+        || (ctx.executionSources.model === "explicit" && isPendingSpawn((ctx.thread as { parentThreadId?: string | null }).parentThreadId, ctx.requestedExecution.model))) return { action: "proceed" };
+      const text = userText(ctx.input);
       const queued = ctx.queuedMessages;
       if (queued.length) {
         const known = new Map<number, DecisionRow>();
@@ -391,6 +489,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
       const providerId = ctx.thread.providerId;
       const on = cfg.enabled && threadOn(threadId);
+      const deadline = Date.now() + LOOKUP_MS; // one budget: the catalog lookups and the note share it
       const looked = on
         ? await bounded(Promise.all([
           catalogFor({ providerId, environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }),
@@ -400,15 +499,15 @@ export default async function plugin(bb: BbPluginApi) {
         : null;
       const [catalog, current, ctxTokens] = looked ?? [null, null, null];
       const d = decide({
-        enabled: on, text: ctx.input.text, providerId, attempt: ctx.attempt, initiator: ctx.initiator,
+        enabled: on, text, providerId, attempt: ctx.attempt, initiator: ctx.initiator,
         requested: { model: ctx.requestedExecution.model, effort: ctx.requestedExecution.reasoningLevel, serviceTier: ctx.requestedExecution.serviceTier },
         modelSource: ctx.executionSources.model === "explicit" || ctx.executionSources.model === "client-preference" ? ctx.executionSources.model : null,
         current, contextTokens: ctxTokens, catalog, policy: compiled,
       });
       const wantsNote = compiled.policy.routing.routeNotes && ctx.attempt === "start-turn" && (ctx.initiator === "user" || ctx.initiator === "agent")
-        && noteWorthy(d.tier) && ["shift", "keep", "hold", "manual"].includes(d.action);
-      const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), LOOKUP_MS, null) : null;
-      const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0);
+        && noteWorthy(d.tier) && ["shift", "keep", "hold"].includes(d.action); // a manual pick is never held just for a note
+      const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), Math.max(0, deadline - Date.now()), null) : null;
+      const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0, text);
       if (queued.length) store.linkQueued(id, threadId, queued.map((r) => r.id));
       changed(threadId);
       const gear = d.needsAmend ? d.gear : null;
@@ -428,12 +527,12 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
-  function record(ctx: MessageDispatchHookContext, d: Decision, ctxTokens: number | null, baseline: string | null, at: number): number {
+  function record(ctx: MessageDispatchHookContext, d: Decision, ctxTokens: number | null, baseline: string | null, at: number, text: string): number {
     const c = d.classification;
     const row: NewDecision = {
       at, thread_id: ctx.thread.id, project_id: ctx.thread.projectId, provider_id: ctx.thread.providerId, initiator: ctx.initiator,
       attempt: ctx.attempt, action: d.action, reason: d.reason, tier: d.tier, score: d.tier ? c.score : null, confidence: d.tier ? c.confidence : null,
-      signals: JSON.stringify(c.signals), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, ctx.input.text),
+      signals: JSON.stringify(c.signals), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
       requested_model: ctx.requestedExecution.model, requested_effort: ctx.requestedExecution.reasoningLevel,
       routed_model: d.gear?.model ?? null, routed_effort: d.gear?.effort ?? null, routed_label: d.gear?.label ?? null, routed_service_tier: d.gear?.serviceTier ?? null,
       baseline_model: baseline, context_tokens: ctxTokens, amend_status: null,
@@ -443,7 +542,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---- usage + cleanup -------------------------------------------------
   bb.events.on("thread.idle", async ({ thread }) => {
-    void guard(thread.id, true);
+    void guard(thread.id, "idle");
     try {
       const rows = await bb.sdk.threads.events.list({ threadId: thread.id, types: ["thread/tokenUsage/updated"], order: "desc", limit: "1" });
       const ev = rows[0];
@@ -463,7 +562,7 @@ export default async function plugin(bb: BbPluginApi) {
       changed(thread.id);
     } catch (e) { bb.log.warn(`usage attach failed: ${String(e)}`); }
   });
-  bb.events.on("thread.deleted", ({ thread }) => { try { store.deletePref(thread.id); } catch { /* ignore */ } });
+  bb.events.on("thread.deleted", ({ thread }) => { try { store.deletePref(thread.id); } catch { /* ignore */ } closeRun(thread.id); });
 
   // ---- preview + state -------------------------------------------------
   function dtoState(threadId: string): ThreadStateDto {
@@ -575,6 +674,20 @@ export default async function plugin(bb: BbPluginApi) {
       const flag = (name: string) => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
       const threadId = flag("--thread") ?? ctx.threadId;
       const [cmd] = argv;
+      /** An agent may act on its own thread or one below it; a human at a terminal (no calling thread) on any. */
+      const mayAct = async (target: string) => {
+        const caller = ctx.threadId;
+        if (!caller || target === caller) return true;
+        let cur: string | null = target;
+        for (let i = 0; i < 8 && cur; i++) {
+          const at: string = cur;
+          const t = (await bounded((async () => bb.sdk.threads.get({ threadId: at }))(), PROVIDER_MS, null)) as { parentThreadId?: string | null } | null;
+          cur = t?.parentThreadId ?? null;
+          if (cur === caller) return true;
+        }
+        return false;
+      };
+      const denied = { exitCode: 1, stderr: "Not allowed: --thread must be your own thread or one of its sub-agents" };
       switch (cmd) {
         case "status": {
           const lines = [`Gearshift: ${cfg.enabled ? "enabled" : "disabled"} (new threads ${compiled.policy.routing.defaultOn ? "on" : "off"})`];
@@ -587,6 +700,7 @@ export default async function plugin(bb: BbPluginApi) {
         }
         case "on": case "off": {
           if (!threadId) return { exitCode: 1, stderr: usage };
+          if (flag("--thread") && !(await mayAct(threadId))) return denied;
           store.setPref(threadId, cmd === "on"); changed(threadId);
           return { exitCode: 0, stdout: `Gearshift ${cmd} for ${threadId}` };
         }
@@ -601,6 +715,7 @@ export default async function plugin(bb: BbPluginApi) {
           argv.forEach((w, i) => { if (w === "--role" || w === "--thread") { skip.add(i); skip.add(i + 1); } });
           const prompt = argv.slice(1).filter((_, i) => !skip.has(i + 1)).join(" ").trim();
           if (!role || !threadId || !prompt) return { exitCode: 1, stderr: usage };
+          if (flag("--thread") && !(await mayAct(threadId))) return denied;
           const r = await spawnRole(threadId, role, prompt);
           return r.ok ? { exitCode: 0, stdout: `${spawnText(r)}` } : { exitCode: 1, stderr: r.error };
         }

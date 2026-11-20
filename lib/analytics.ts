@@ -38,7 +38,7 @@ export function buildFanout(rows: DecisionRow[], runs: RunRow[], labels: Readonl
   let sub = 0, over = 0;
   for (const r of runs) {
     sub += r.spent;
-    const isOver = r.budget > 0 && r.spent >= r.budget;
+    const isOver = r.over_budget === 1 || (r.budget > 0 && r.spent >= r.budget);
     if (isOver) over++;
     const e = role.get(r.role) ?? { count: 0, spent: 0, budget: 0, over: 0 };
     e.count++; e.spent += r.spent; e.budget += r.budget; if (isOver) e.over++;
@@ -49,7 +49,7 @@ export function buildFanout(rows: DecisionRow[], runs: RunRow[], labels: Readonl
     leadTokens: lead, subTokens: sub, runs: runs.length, overBudget: over,
     byRole: [...role.entries()].map(([name, e]) => ({ role: name, ...e })).sort((a, b) => b.count - a.count),
     budgetUsed: hist,
-    recent: runs.slice(-20).reverse().map((r) => ({ id: r.id, childThreadId: r.child_thread_id, role: r.role, tier: r.tier, modelLabel: r.model ? modelLabel(r.model, labels) : null, effort: r.effort, spent: r.spent, budget: r.budget, status: r.status, startedAt: r.started_at })),
+    recent: runs.slice(-20).reverse().map((r) => ({ id: r.id, childThreadId: r.child_thread_id, role: r.role, tier: r.tier, modelLabel: r.model_label ?? (r.model ? modelLabel(r.model, labels) : null), effort: r.effort, spent: r.spent, budget: r.budget, status: r.status, startedAt: r.started_at })),
   };
 }
 
