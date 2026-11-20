@@ -20,14 +20,8 @@ how one message scores.
 
 ## From message to model
 
-```mermaid
-flowchart LR
-    A["Message text"] --> B["Signals<br/>change · research · large build ·<br/>investigation · breadth · risk"]
-    B --> C["Score 0–14"]
-    C --> D["Tier"]
-    D --> E["Gear for the thread's provider"]
-    E --> F["Model · effort · service tier"]
-```
+<p align="center"><img src="assets/diagrams/pipeline.svg" width="100%" alt="From message to model: message text, then signals (change, research, large build, risk and others), then a score from 0 to 14, then a tier, then the gear for the thread's provider, then a model, effort and service tier."></p>
+
 
 1. Gearshift reads only the words you wrote. bb's envelopes, system reminders, attachment
    notes and pasted blocks are set aside first (a long paste still counts towards size).

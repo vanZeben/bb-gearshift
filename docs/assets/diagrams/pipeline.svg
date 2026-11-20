@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="250" viewBox="0 0 1280 250" role="img" aria-labelledby="t d">
+  <title id="t">From message to model</title>
+  <desc id="d">Message text is turned into signals, the signals into a score from 0 to 14, the score into a tier, and the tier into a gear for the thread's provider: a model, an effort and a service tier.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b0f17"/><stop offset="1" stop-color="#171d29"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#56606d"/></marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f5b041"/></marker>
+  </defs>
+  <rect width="1280" height="250" rx="20" fill="url(#bg)"/>
+  <g font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="48" y="52" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">FROM MESSAGE TO MODEL</text>
+    <path d="M204 140 L236 140" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M414 140 L446 140" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M624 140 L656 140" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M834 140 L866 140" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M1044 140 L1076 140" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <rect x="26" y="98" width="178" height="84" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="115" y="145.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Message text</text>
+    <rect x="236" y="98" width="178" height="84" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="325" y="125.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Signals</text>
+    <text x="325" y="145.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">change · research ·</text>
+    <text x="325" y="164.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">large build · risk …</text>
+    <rect x="446" y="98" width="178" height="84" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="535" y="135.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Score</text>
+    <text x="535" y="155.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">0–14</text>
+    <rect x="656" y="98" width="178" height="84" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="745" y="135.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Tier</text>
+    <text x="745" y="155.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">trivial … xlarge</text>
+    <rect x="866" y="98" width="178" height="84" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="955" y="135.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Gear for the</text>
+    <text x="955" y="155.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">thread's provider</text>
+    <rect x="1076" y="98" width="178" height="84" rx="14" fill="#f5b041"/>
+    <text x="1165" y="135.7" font-size="15" font-weight="600" fill="#1a1205" text-anchor="middle">Model · effort ·</text>
+    <text x="1165" y="155.2" font-size="15" font-weight="600" fill="#1a1205" text-anchor="middle">service tier</text>
+  </g>
+</svg>

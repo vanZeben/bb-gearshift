@@ -35,23 +35,8 @@ A "thanks" doesn't need the top model at maximum effort, and a multi-file refact
 
 ## How it routes
 
-```mermaid
-flowchart LR
-    M([You send a message]) --> G{Gearshift on<br/>for this thread?}
-    G -- no --> P([Sent as is])
-    G -- yes --> X{Steer, retry,<br/>or system message?}
-    X -- yes --> P
-    X -- no --> N{Names a model<br/>or picked by hand?}
-    N -- yes --> P2([Runs on that model])
-    N -- no --> S["Score 0–14<br/>from local rules"]
-    S --> T["Tier<br/>trivial · small · medium · large · xlarge"]
-    T --> R["Gear for this provider<br/>model · effort · service tier"]
-    R --> C{Long thread and<br/>this is a downshift?}
-    C -- yes --> H([Holds the current gear])
-    C -- no --> K{Already on<br/>that gear?}
-    K -- yes --> P
-    K -- no --> SH([Shifts, then sends])
-```
+<p align="center"><img src="docs/assets/diagrams/routing.svg" width="100%" alt="How Gearshift routes a message. If Gearshift is off for the thread, or the message is a steer, retry or system message, it is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise the text is scored 0 to 14 with local rules, the tier picks a gear for the provider, a downshift on a long thread holds the current gear, a message already on that gear is sent as is, and otherwise Gearshift shifts, then sends."></p>
+
 
 A shift takes about a tenth of a second: bb holds the message for a moment, Gearshift sets its model and effort, and bb sends it on. If anything goes wrong, or a lookup takes longer than 1.5 seconds, the message goes through unchanged. [How it works](docs/how-it-works.md) has the details.
 

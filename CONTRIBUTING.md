@@ -18,7 +18,8 @@ privately, as [SECURITY.md](SECURITY.md) describes, not in a public issue.
 - **Pick up an issue** labelled `good first issue` or `help wanted`, and say so in the issue
   so nobody duplicates the work.
 - **Improve the docs.** If something here or in [docs/](docs/) confused you, it will confuse
-  the next person too.
+  the next person too. The diagrams are generated: edit `scripts/render-diagrams.mjs` and run
+  `npm run diagrams`.
 
 ## Development setup
 
