@@ -38,7 +38,7 @@ describe("buildOverview", () => {
     expect(o.byProvider.find((p) => p.providerId === "codex")!.count).toBe(1);
     expect(o.daily).toHaveLength(7);
     expect(o.daily.at(-1)!.routed).toBe(3);
-    expect(o.transitions).toEqual([{ from: "opus", to: "sonnet", count: 2 }]);
+    expect(o.transitions).toEqual([{ from: "opus", fromLabel: "Opus", to: "sonnet", toLabel: "Sonnet", count: 2 }]);
   });
   it("lists the newest rows first", () => {
     expect(o.recent[0]!.id).toBe(rows.at(-1)!.id);
