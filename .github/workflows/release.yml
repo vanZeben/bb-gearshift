@@ -42,7 +42,7 @@ jobs:
             echo "prerelease=$pre"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ steps.meta.outputs.tag }}
           persist-credentials: false
@@ -88,7 +88,7 @@ jobs:
       TAG: ${{ needs.verify.outputs.tag }}
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ needs.verify.outputs.tag }}
           persist-credentials: false
