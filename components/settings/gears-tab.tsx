@@ -19,7 +19,7 @@ const CLASS_CHOICES: Array<{ value: string; label: string }> = [
 ];
 const CUSTOM = "__custom__";
 
-function ModelPicker({ value, models, onChange, label }: {
+export function ModelPicker({ value, models, onChange, label }: {
   value: string; models: readonly ModelInfo[] | null; onChange: (v: string) => void; label: string;
 }) {
   const known = CLASS_CHOICES.some((c) => c.value === value) || (models ?? []).some((m) => m.id === value);
