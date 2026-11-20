@@ -7,6 +7,7 @@ import type { Policy } from "@/lib/policy";
 import { EditorContext, type EditorCtx } from "./context";
 import { ConfirmButton } from "./fields";
 import { GearsTab } from "./gears-tab";
+import { TeamsTab } from "./teams-tab";
 import { ResetContext } from "./reset-context";
 import { ScoringTab } from "./scoring-tab";
 import { TryTab } from "./try-tab";
@@ -16,11 +17,12 @@ import {
 
 const ID_PREFIX = "gearshift-policy";
 
-type TabId = "gears" | "scoring" | "try";
+type TabId = "gears" | "teams" | "scoring" | "try";
 
 /** Which top-level policy keys (and error path prefixes) belong to each tab. */
 const TAB_KEYS: Partial<Record<TabId, string[]>> = {
   gears: ["gears"],
+  teams: ["teams", "roles"],
   scoring: ["tiers", "scoring", "explicitModel", "skipPatterns"],
 };
 
@@ -146,6 +148,7 @@ function PolicyEditorInner() {
             onValueChange={(v) => setTab(v as TabId)}
             tabs={[
               { id: "gears", label: "Gears", badge: tabBadge("gears") },
+              { id: "teams", label: "Teams", badge: tabBadge("teams") },
               { id: "scoring", label: "Scoring", badge: tabBadge("scoring") },
               { id: "try", label: "Try a message" },
             ]}
@@ -153,6 +156,7 @@ function PolicyEditorInner() {
 
           <div id={`${ID_PREFIX}-panel`} role="tabpanel" aria-labelledby={tabDomId(ID_PREFIX, tab)} tabIndex={0} className="min-w-0 focus-visible:outline-none">
             {tab === "gears" ? <GearsTab /> : null}
+            {tab === "teams" ? <TeamsTab /> : null}
             {tab === "scoring" ? <ScoringTab /> : null}
             {tab === "try" ? <TryTab overrides={ed.overrides} /> : null}
           </div>
