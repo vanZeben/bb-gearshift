@@ -20,7 +20,21 @@ export const MIGRATIONS: string[] = [
   // Links bb queue rows to the decision made for them (one decision can cover a grouped drain of several rows).
   `CREATE TABLE queued_links (queued_message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, decision_id INTEGER NOT NULL)`,
   `CREATE INDEX queued_links_decision ON queued_links(decision_id)`,
+  // Sub-agent runs started by gearshift_spawn (one row per child thread).
+  `CREATE TABLE runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, parent_thread_id TEXT NOT NULL, child_thread_id TEXT NOT NULL, role TEXT NOT NULL,
+  tier TEXT NOT NULL, provider TEXT NOT NULL, model TEXT, effort TEXT, budget INTEGER NOT NULL, spent INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'running', started_at INTEGER NOT NULL, ended_at INTEGER)`,
+  `CREATE UNIQUE INDEX runs_child ON runs(child_thread_id)`,
+  `CREATE INDEX runs_started ON runs(started_at)`,
 ];
+
+export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
+export interface RunRow {
+  id: number; parent_thread_id: string; child_thread_id: string; role: string; tier: string; provider: string;
+  model: string | null; effort: string | null; budget: number; spent: number; status: RunStatus; started_at: number; ended_at: number | null;
+}
+export type NewRun = Omit<RunRow, "id" | "spent" | "status" | "ended_at">;
 
 export interface DecisionRow {
   id: number; at: number; thread_id: string; project_id: string | null; provider_id: string; initiator: string; attempt: string;
@@ -105,7 +119,32 @@ export class Store {
   prune(olderThan: number): number {
     const n = this.db.prepare(`DELETE FROM decisions WHERE at<?`).run(olderThan).changes;
     this.db.prepare(`DELETE FROM queued_links WHERE decision_id NOT IN (SELECT id FROM decisions)`).run();
+    this.db.prepare(`DELETE FROM runs WHERE started_at<? AND status NOT IN ('running','nudged')`).run(olderThan);
     return n;
+  }
+
+  /** Display labels the router has seen for model ids (from routed decisions). */
+  modelLabels(): Map<string, string> {
+    const rows = this.db.prepare(`SELECT routed_model m, routed_label l FROM decisions WHERE routed_model IS NOT NULL AND routed_label IS NOT NULL AND routed_label != routed_model GROUP BY routed_model`).all() as Array<{ m: string; l: string }>;
+    return new Map(rows.map((r) => [r.m, r.l]));
+  }
+
+  insertRun(r: NewRun): number {
+    return Number(this.db.prepare(`INSERT INTO runs (parent_thread_id, child_thread_id, role, tier, provider, model, effort, budget, started_at) VALUES (@parent_thread_id,@child_thread_id,@role,@tier,@provider,@model,@effort,@budget,@started_at)`).run(r).lastInsertRowid);
+  }
+  runForChild(childThreadId: string): RunRow | undefined {
+    return this.db.prepare(`SELECT * FROM runs WHERE child_thread_id=?`).get(childThreadId) as RunRow | undefined;
+  }
+  /** Runs whose child may still be working. */
+  openRuns(): RunRow[] {
+    return this.db.prepare(`SELECT * FROM runs WHERE status IN ('running','nudged') ORDER BY id`).all() as RunRow[];
+  }
+  patchRun(id: number, f: Partial<Pick<RunRow, "spent" | "status" | "ended_at">>): void {
+    const cols = Object.keys(f);
+    if (cols.length) this.db.prepare(`UPDATE runs SET ${cols.map((c) => `${c}=@${c}`).join(",")} WHERE id=@id`).run({ ...f, id });
+  }
+  runsSince(ms: number): RunRow[] {
+    return this.db.prepare(`SELECT * FROM runs WHERE started_at>=? ORDER BY id`).all(ms) as RunRow[];
   }
 
   getPref(threadId: string): boolean | null {

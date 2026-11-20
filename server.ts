@@ -10,6 +10,8 @@ import { DEFAULT_POLICY, compilePolicy, ladderFor, removeOverridePath, resolvePo
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
+import { NOTE_PREFIX, formatBudget, formatRouteNote, gearLabel, guardAction, noteWorthy, providersFor, resolveRole, roleTarget, spendTokens } from "./lib/team";
+import { TIERS, type Tier } from "./lib/policy";
 
 export { rpcContract };
 void defineRpcContract;
@@ -36,6 +38,7 @@ export default async function plugin(bb: BbPluginApi) {
     respectManualPicks: { type: "boolean", label: "A model picked by hand wins", description: "When you choose a model in the composer, Gearshift leaves that message alone.", default: true },
     routeAgentMessages: { type: "boolean", label: "Route messages from other agents", description: "Also pick a model for messages that other threads or agents send into a thread.", default: true },
     holdAboveTokens: { type: "number", label: "Don't downshift threads above this many context tokens (0 = never hold)", description: "Switching to a cheaper model on a big context re-reads it uncached, so Gearshift keeps the current model instead.", default: 60000, experimental_schema: z.number().int().min(0) },
+    routeNotes: { type: "boolean", label: "Add a team note to medium and larger messages", description: "Tells the agent which sub-agent roles to spawn (gearshift_spawn), on which models, with what budgets. Invisible in the chat.", default: true },
     retentionDays: { type: "number", label: "Days of history kept", description: "Routing decisions older than this are deleted.", default: 90, experimental_schema: z.number().int().min(1).max(3650) },
   });
   let cfg = await settings.get();
@@ -61,6 +64,7 @@ export default async function plugin(bb: BbPluginApi) {
     respectManualPicks: c.respectManualPicks ?? DEFAULT_POLICY.routing.respectManualPicks,
     routeAgentMessages: c.routeAgentMessages ?? DEFAULT_POLICY.routing.routeAgentMessages,
     holdAboveTokens: c.holdAboveTokens ?? DEFAULT_POLICY.routing.holdAboveTokens,
+    routeNotes: c.routeNotes ?? DEFAULT_POLICY.routing.routeNotes,
   });
   /** Overrides on top of the defaults, with the routing section taken from the settings. Null when it does not compile. */
   const build = (o: PolicyOverrides): { compiled: CompiledPolicy; errors: PolicyError[] } => {
@@ -101,17 +105,37 @@ export default async function plugin(bb: BbPluginApi) {
   // ---- catalog ---------------------------------------------------------
   const catalogCache = new Map<string, { at: number; models: CatalogModel[] }>();
   /** Not bounded here: callers race it so a late answer still lands in the cache. */
+  /**
+   * The provider's model list. The catalog is host-scoped on some servers, so with no environment or host
+   * named, a call without a host can fail ("Local host daemon is not initialized"): fall back to the hosts,
+   * connected ones first, until one lists models. Throws the first error when nothing answered.
+   */
+  async function listModels(p: { providerId: string; environmentId?: string | null; hostId?: string | null; projectId?: string | null }) {
+    const base = { providerId: p.providerId, preferCached: true };
+    if (p.environmentId) return (await bb.sdk.providers.models({ ...base, environmentId: p.environmentId })).models;
+    if (p.hostId) return (await bb.sdk.providers.models({ ...base, hostId: p.hostId, ...(p.projectId ? { projectId: p.projectId } : {}) })).models;
+    let first: unknown = null;
+    try {
+      const res = await bb.sdk.providers.models({ ...base, ...(p.projectId ? { projectId: p.projectId } : {}) });
+      if (res.models.length) return res.models;
+    } catch (e) { first = e; }
+    const hosts = await bb.sdk.hosts.list().catch(() => []);
+    const ordered = [...hosts].sort((a, b) => Number(b.status === "connected") - Number(a.status === "connected"));
+    for (const h of ordered) {
+      try {
+        const res = await bb.sdk.providers.models({ ...base, hostId: h.id });
+        if (res.models.length) return res.models;
+      } catch (e) { first = first ?? e; }
+    }
+    if (first) throw first;
+    return [];
+  }
   async function catalogFor(p: { providerId: string; environmentId?: string | null; hostId?: string | null; projectId?: string | null }): Promise<CatalogModel[] | null> {
     const key = `${p.providerId}|${p.environmentId ?? ""}|${p.hostId ?? ""}|${p.projectId ?? ""}`;
     const hit = catalogCache.get(key);
     if (hit && Date.now() - hit.at < CATALOG_TTL) return hit.models;
     try {
-      const base = { providerId: p.providerId, preferCached: true };
-      const args = p.environmentId ? { ...base, environmentId: p.environmentId }
-        : p.hostId ? { ...base, hostId: p.hostId, ...(p.projectId ? { projectId: p.projectId } : {}) }
-        : { ...base, ...(p.projectId ? { projectId: p.projectId } : {}) };
-      const res = await bb.sdk.providers.models(args);
-      const models = toCatalog(res.models);
+      const models = toCatalog(await listModels(p));
       if (models.length) { catalogCache.set(key, { at: Date.now(), models }); return models; }
     } catch { /* fall through */ }
     return null;
@@ -159,15 +183,18 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---- amend -----------------------------------------------------------
   // Decisions waiting for their queue row to appear (inline attempts): decision id -> what to amend with.
-  const awaitingRow = new Map<number, { threadId: string; gear: Gear }>();
+  const awaitingRow = new Map<number, { threadId: string; gear: Gear | null; note: string | null }>();
 
-  async function amendOne(threadId: string, row: QueuedRow, gear: Gear): Promise<boolean> {
+  async function amendOne(threadId: string, row: QueuedRow, gear: Gear | null, note: string | null): Promise<boolean> {
     let cur: QueuedRow | undefined = row;
     for (let tries = 0; tries < 3 && cur && !disposed; tries++) {
       try {
+        const hasNote = cur.content.some((b) => "text" in b && b.text.startsWith(NOTE_PREFIX)); // never twice
         await bb.sdk.threads.queuedMessages.update({
-          threadId, queuedMessageId: cur.id, expectedUpdatedAt: cur.updatedAt, model: gear.model,
-          ...(gear.effort ? { reasoningLevel: gear.effort } : {}), ...(gear.serviceTier ? { serviceTier: gear.serviceTier } : {}),
+          threadId, queuedMessageId: cur.id, expectedUpdatedAt: cur.updatedAt,
+          ...(gear ? { model: gear.model } : {}),
+          ...(gear?.effort ? { reasoningLevel: gear.effort } : {}), ...(gear?.serviceTier ? { serviceTier: gear.serviceTier } : {}),
+          ...(note && !hasNote ? { input: [...cur.content, { type: "text", text: note, mentions: [], visibility: "agent-only" }] as never } : {}),
         });
         return true;
       } catch (e) {
@@ -180,9 +207,9 @@ export default async function plugin(bb: BbPluginApi) {
     return false;
   }
 
-  async function amendRows(threadId: string, decisionId: number, rows: QueuedRow[], gear: Gear) {
+  async function amendRows(threadId: string, decisionId: number, rows: QueuedRow[], gear: Gear | null, note: string | null) {
     let ok = rows.length > 0;
-    try { for (const r of rows) ok = (await amendOne(threadId, r, gear)) && ok; }
+    try { for (const [i, r] of rows.entries()) ok = (await amendOne(threadId, r, gear, i === rows.length - 1 ? note : null)) && ok; }
     catch (e) { ok = false; bb.log.warn(`amend failed: ${String(e)}`); }
     const cur = store.get(decisionId);
     if (cur && cur.amend_status === "pending") store.patch(decisionId, { amend_status: ok ? "done" : "failed" });
@@ -211,7 +238,7 @@ export default async function plugin(bb: BbPluginApi) {
     const want = d && awaitingRow.get(d.id);
     if (!d || !want) return;
     awaitingRow.delete(d.id);
-    void amendRows(threadId, d.id, [row], want.gear);
+    void amendRows(threadId, d.id, [row], want.gear, want.note);
   }
 
   bb.events.on("message.queued", ({ entry }) => {
@@ -236,6 +263,100 @@ export default async function plugin(bb: BbPluginApi) {
     }
   }
 
+
+  // ---- teams: route note, spawn, budget guard ------------------------------
+  let spawning = 0;
+  const parentOf = (t: unknown) => (t as { parentThreadId?: string | null }).parentThreadId ?? null;
+
+  /** Catalogs for every provider the team's roles run on (the parent's is passed in). */
+  async function catalogsFor(roles: readonly string[], parentProviderId: string, tier: Tier, scope: { environmentId?: string | null; hostId?: string | null; projectId?: string | null }, parentCatalog: CatalogModel[] | null) {
+    const out = new Map<string, CatalogModel[]>();
+    if (parentCatalog) out.set(parentProviderId, parentCatalog);
+    for (const pid of providersFor(compiled.policy, roles, parentProviderId, tier)) {
+      if (out.has(pid)) continue;
+      const c = await catalogFor({ providerId: pid, ...(pid === parentProviderId ? scope : { projectId: scope.projectId }) });
+      if (c) out.set(pid, c);
+    }
+    return out;
+  }
+  async function buildNote(tier: Tier, score: number | null, providerId: string, scope: { environmentId?: string | null; hostId?: string | null; projectId?: string | null }, parentCatalog: CatalogModel[] | null): Promise<string | null> {
+    try {
+      const catalogs = await catalogsFor(compiled.policy.teams[tier].roles, providerId, tier, scope, parentCatalog);
+      return formatRouteNote({ tier, score, policy: compiled.policy, parentProviderId: providerId, catalogs });
+    } catch (e) { bb.log.warn(`route note failed: ${String(e)}`); return null; }
+  }
+
+  interface SpawnResult { ok: true; childThreadId: string; role: string; providerId: string; label: string; effort: string | null; budget: number; tier: Tier }
+  async function spawnRole(parentThreadId: string, roleName: string, prompt: string, title?: string): Promise<SpawnResult | { ok: false; error: string }> {
+    try {
+      const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
+      const tier = (store.lastForThread(parentThreadId)?.tier as Tier | null) ?? "medium";
+      const target = roleTarget(compiled.policy, roleName, parent.providerId, tier);
+      if (!target) return { ok: false, error: `Unknown role "${roleName}". Roles: ${Object.keys(compiled.policy.roles).join(", ")}` };
+      const catalog = await catalogFor({ providerId: target.providerId, ...(target.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), projectId: parent.projectId });
+      const r = catalog ? resolveRole(compiled.policy, roleName, parent.providerId, tier, new Map([[target.providerId, catalog]])) : null;
+      if (!r?.gear) return { ok: false, error: `No model for role "${roleName}" on ${target.providerId}` };
+      if (!parent.environmentId) return { ok: false, error: "The calling thread has no environment yet" };
+      const g = r.gear;
+      spawning++;
+      let child;
+      try {
+        child = await bb.sdk.threads.spawn({
+          projectId: parent.projectId, environment: { type: "reuse", environmentId: parent.environmentId }, parentThreadId,
+          providerId: target.providerId, model: g.model, ...(g.effort ? { reasoningLevel: g.effort } : {}), ...(g.serviceTier ? { serviceTier: g.serviceTier } : {}),
+          executionInputSources: { providerId: "explicit", model: "explicit", ...(g.effort ? { reasoningLevel: "explicit" as const } : {}), ...(g.serviceTier ? { serviceTier: "explicit" as const } : {}) },
+          title: title ?? `${roleName}`, prompt,
+        } as never);
+      } finally { later(5000, () => { spawning = Math.max(0, spawning - 1); }); }
+      store.insertRun({ parent_thread_id: parentThreadId, child_thread_id: child.id, role: roleName, tier, provider: target.providerId, model: g.model, effort: g.effort, budget: target.budget, started_at: Date.now() });
+      changed(parentThreadId);
+      return { ok: true, childThreadId: child.id, role: roleName, providerId: target.providerId, label: g.label, effort: g.effort, budget: target.budget, tier };
+    } catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+  }
+  const spawnText = (r: SpawnResult) => `Spawned ${r.role} sub-agent: thread ${r.childThreadId} on ${gearLabel({ model: "", label: r.label, effort: r.effort, serviceTier: null }, r.label)} (${r.providerId}), budget ${formatBudget(r.budget)} tokens. It reports back to you when done.`;
+
+  bb.agents.registerTool({
+    name: "gearshift_spawn",
+    description: "Spawn a sub-agent thread for a team role (implement, qa, verify, review, explore, research, architecture, ...) on the model and budget Gearshift's policy sets for that role. Use the roles from the [gearshift] team note.",
+    presentation: { label: { pending: "Spawning sub-agent", completed: "Spawned sub-agent" } },
+    parameters: z.object({ role: z.string().min(1), prompt: z.string().min(1), title: z.string().optional() }),
+    async execute({ role, prompt, title }: { role: string; prompt: string; title?: string }, { threadId }: { threadId: string }) {
+      const r = await spawnRole(threadId, role, prompt, title);
+      return r.ok ? spawnText(r) : { content: [{ type: "text", text: r.error }], isError: true };
+    },
+  } as never);
+
+  const textInput = (text: string) => [{ type: "text", text, mentions: [] }] as never;
+  const clip = (s: string | null, n: number) => (s ? (s.length > n ? `${s.slice(0, n)}…` : s) : "(no output)");
+  /** Check one child against its budget: nudge once at 80%, stop at 100% and report to the parent. Touches only threads in `runs`. */
+  async function guard(childId: string, idle: boolean) {
+    const run = store.runForChild(childId);
+    if (!run || (run.status !== "running" && run.status !== "nudged")) return;
+    try {
+      const rows = await bounded(bb.sdk.threads.events.list({ threadId: childId, types: ["thread/tokenUsage/updated"], order: "desc", limit: "1" }), PROVIDER_MS, []);
+      const total = (rows[0]?.data as { tokenUsage?: { total?: Record<string, number | undefined> } } | undefined)?.tokenUsage?.total;
+      if (total) {
+        const split = total.cacheReadInputTokens !== undefined || total.cacheWriteInputTokens !== undefined;
+        const spent = spendTokens({ inputTokens: total.inputTokens ?? 0, outputTokens: total.outputTokens ?? 0, cacheReadTokens: split ? total.cacheReadInputTokens ?? 0 : total.cachedInputTokens ?? 0, cacheWriteTokens: total.cacheWriteInputTokens ?? 0 });
+        store.patchRun(run.id, { spent });
+        run.spent = spent;
+      }
+      const act = guardAction(run.spent, run.budget, run.status);
+      if (act === "nudge") {
+        store.patchRun(run.id, { status: "nudged" }); // before sending: the nudge goes out once
+        await bounded(bb.sdk.threads.send({ threadId: childId, mode: "steer-if-active", input: textInput(`${NOTE_PREFIX} Budget at 80%: finish the current step, then report done vs left.`) } as never), PROVIDER_MS, null);
+      } else if (act === "stop") {
+        store.patchRun(run.id, { status: "stopped", ended_at: Date.now() });
+        await bounded(bb.sdk.threads.stop({ threadId: childId }), PROVIDER_MS, null);
+        const out = await bounded(bb.sdk.threads.output({ threadId: childId }), PROVIDER_MS, null);
+        const report = `${NOTE_PREFIX} run report: ${run.role} sub-agent ${childId} stopped at its budget (${formatBudget(run.spent)}/${formatBudget(run.budget)} tokens). Its last output: ${clip(out?.output ?? null, 1500)}`;
+        await bounded(bb.sdk.threads.send({ threadId: run.parent_thread_id, mode: "queue-if-active", input: textInput(report), senderThreadId: childId } as never), PROVIDER_MS, null);
+      } else if (idle) store.patchRun(run.id, { status: "done", ended_at: Date.now() });
+      changed(run.parent_thread_id);
+    } catch (e) { bb.log.warn(`budget guard failed: ${String(e)}`); }
+  }
+  bb.events.on("experimental_thread.events", ({ thread }) => { void guard(thread.id, false); });
+
   // ---- the hook --------------------------------------------------------
   // Inline first attempt (no queued rows): always a new decision. Re-attempt: rows with a decision of ours
   // proceed without deciding again; only rows we never saw get a fresh decision on their combined text.
@@ -243,6 +364,9 @@ export default async function plugin(bb: BbPluginApi) {
     try {
       const t0 = Date.now();
       const threadId = ctx.thread.id;
+      // Sub-agents we spawned keep the gear we gave them; our own nudges and reports are never routed.
+      if (store.runForChild(threadId) || ctx.input.text.startsWith(NOTE_PREFIX)
+        || (spawning > 0 && ctx.executionSources.model === "explicit" && !!(ctx.thread as { parentThreadId?: string | null }).parentThreadId)) return { action: "proceed" };
       const queued = ctx.queuedMessages;
       if (queued.length) {
         const known = new Map<number, DecisionRow>();
@@ -281,18 +405,21 @@ export default async function plugin(bb: BbPluginApi) {
         modelSource: ctx.executionSources.model === "explicit" || ctx.executionSources.model === "client-preference" ? ctx.executionSources.model : null,
         current, contextTokens: ctxTokens, catalog, policy: compiled,
       });
+      const wantsNote = compiled.policy.routing.routeNotes && ctx.attempt === "start-turn" && (ctx.initiator === "user" || ctx.initiator === "agent")
+        && noteWorthy(d.tier) && ["shift", "keep", "hold", "manual"].includes(d.action);
+      const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), LOOKUP_MS, null) : null;
       const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0);
       if (queued.length) store.linkQueued(id, threadId, queued.map((r) => r.id));
       changed(threadId);
-      if (d.needsAmend && d.gear) {
+      const gear = d.needsAmend ? d.gear : null;
+      if (gear || note) {
         store.patch(id, { amend_status: "pending" });
-        const gear = d.gear;
-        if (queued.length) later(0, () => { void amendRows(threadId, id, queued, gear); });
+        if (queued.length) later(0, () => { void amendRows(threadId, id, queued, gear, note); });
         else {
-          awaitingRow.set(id, { threadId, gear });
+          awaitingRow.set(id, { threadId, gear, note });
           later(1000, () => { void pollForRow(threadId, id); });
         }
-        return { action: "wait", reason: `Shifting to ${gear.label}${gear.effort ? ` · ${gear.effort}` : ""}` };
+        return { action: "wait", reason: gear ? `Shifting to ${gear.label}${gear.effort ? ` · ${gear.effort}` : ""}` : "Adding the team note" };
       }
       return { action: "proceed" };
     } catch (e) {
@@ -316,6 +443,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ---- usage + cleanup -------------------------------------------------
   bb.events.on("thread.idle", async ({ thread }) => {
+    void guard(thread.id, true);
     try {
       const rows = await bb.sdk.threads.events.list({ threadId: thread.id, types: ["thread/tokenUsage/updated"], order: "desc", limit: "1" });
       const ev = rows[0];
@@ -340,7 +468,7 @@ export default async function plugin(bb: BbPluginApi) {
   // ---- preview + state -------------------------------------------------
   function dtoState(threadId: string): ThreadStateDto {
     const last = store.lastForThread(threadId);
-    return { threadId, enabled: threadOn(threadId), last: last ? toDto(last) : null };
+    return { threadId, enabled: threadOn(threadId), last: last ? toDto(last, store.modelLabels()) : null };
   }
   async function preview(i: { text: string; providerId: string | null; model: string | null; effort: string | null; threadId: string | null; projectId: string | null; overrides?: Record<string, unknown> }): Promise<PreviewDto> {
     let policy = compiled;
@@ -389,9 +517,9 @@ export default async function plugin(bb: BbPluginApi) {
     const providers = await Promise.all(list.filter((p) => !("enabled" in p) || p.enabled !== false).map(async (info) => {
       const base = { id: info.id, displayName: info.displayName ?? info.id };
       try {
-        const res = await bounded(bb.sdk.providers.models({ providerId: info.id, preferCached: true }), PROVIDER_MS, TIMED_OUT);
+        const res = await bounded(listModels({ providerId: info.id }), PROVIDER_MS, TIMED_OUT);
         if (res === TIMED_OUT) return { ...base, models: [], error: "timed out" };
-        const models = toCatalog(res.models).map((m) => ({
+        const models = toCatalog(res).map((m) => ({
           id: m.id, label: m.displayName, isDefault: m.isDefault, efforts: m.efforts, serviceTiers: m.serviceTiers, sizeClass: sizeClass(m),
         }));
         return { ...base, models, error: null };
@@ -423,7 +551,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (enabled) armed.delete(key); else armed.set(key, { projectId, text, at: Date.now(), enabled: false });
       return { ok: true };
     },
-    overview: ({ days }) => buildOverview(store.since(Date.now() - days * DAY), days, store.countOff()),
+    overview: ({ days }) => buildOverview(store.since(Date.now() - days * DAY), days, store.countOff(), Date.now(), store.runsSince(Date.now() - days * DAY), store.modelLabels()),
     getPolicy: () => policyState(),
     savePolicy: ({ overrides: next }) => storeOverrides(next),
     resetPolicy: ({ path }) => storeOverrides(removeOverridePath(overrides, path)),
@@ -431,7 +559,7 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // ---- CLI -------------------------------------------------------------
-  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift policy";
+  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift policy\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
   bb.cli.register({
     name: "gearshift",
     summary: "Automatic model routing: status, per-thread toggle, explain a routing decision",
@@ -440,6 +568,7 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "on", summary: "Turn Gearshift on for a thread", usage: "bb gearshift on --thread <id>" },
       { name: "off", summary: "Turn Gearshift off for a thread", usage: "bb gearshift off --thread <id>" },
       { name: "policy", summary: "Print the effective routing policy as JSON (read-only; edit it in Gearshift settings)", usage: "bb gearshift policy" },
+      { name: "spawn", summary: "Spawn a sub-agent thread for a team role on its policy gear and budget", usage: "bb gearshift spawn --role <role> [--thread <id>] <prompt...>" },
       { name: "explain", summary: "Classify text and show the gear it would get", usage: "bb gearshift explain <text...> [--provider <id>]" },
     ],
     async run(argv, ctx) {
@@ -465,6 +594,15 @@ export default async function plugin(bb: BbPluginApi) {
           const lines = [JSON.stringify(compiled.policy, null, 2)];
           if (policyErrors.length) lines.push(`# Saved policy is invalid, routing with defaults: ${policyErrors.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
           return { exitCode: 0, stdout: lines.join("\n") };
+        }
+        case "spawn": {
+          const role = flag("--role");
+          const skip = new Set<number>();
+          argv.forEach((w, i) => { if (w === "--role" || w === "--thread") { skip.add(i); skip.add(i + 1); } });
+          const prompt = argv.slice(1).filter((_, i) => !skip.has(i + 1)).join(" ").trim();
+          if (!role || !threadId || !prompt) return { exitCode: 1, stderr: usage };
+          const r = await spawnRole(threadId, role, prompt);
+          return r.ok ? { exitCode: 0, stdout: `${spawnText(r)}` } : { exitCode: 1, stderr: r.error };
         }
         case "explain": {
           const providerFlag = flag("--provider");

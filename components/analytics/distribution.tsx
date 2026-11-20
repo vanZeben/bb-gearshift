@@ -107,7 +107,7 @@ export function Transitions({ data }: { data: OverviewDto }) {
           {rows.map((r) => (
             <li key={`${r.from}>${r.to}`} className="flex items-center gap-2 py-1.5">
               <span className="min-w-0 flex-1 truncate">
-                {r.from} <span className="text-muted-foreground">→</span> {r.to}
+                {r.fromLabel} <span className="text-muted-foreground">→</span> {r.toLabel}
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">{r.count.toLocaleString("en-US")}</span>
             </li>

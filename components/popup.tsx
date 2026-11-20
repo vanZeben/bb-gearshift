@@ -10,9 +10,9 @@ import { formatContributions, formatGear, formatRelativeTime, formatTier, shortM
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-3 text-xs">
+    <div className="flex w-full items-start justify-between gap-3 text-xs">
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-right">{children}</dd>
+      <dd className="ml-auto min-w-0 text-right">{children}</dd>
     </div>
   );
 }
@@ -29,7 +29,7 @@ export function GearshiftPopup() {
   const score = formatContributions(preview?.contributions);
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-3 p-3 sm:w-80">
+    <div className="flex w-full min-w-0 flex-col gap-3 p-3 sm:min-w-80">
       <div className="flex items-center justify-between gap-3">
         <label htmlFor={switchId} className="text-sm font-medium">
           {isNewThread ? "Gearshift for this new thread" : "Gearshift for this thread"}
@@ -44,7 +44,7 @@ export function GearshiftPopup() {
           <section aria-label="This draft">
             <h3 className="mb-1 text-xs font-medium text-muted-foreground">This draft</h3>
             {hasDraft && preview ? (
-              <dl className="flex flex-col gap-1">
+              <dl className="flex w-full flex-col gap-1">
                 <Row label="Tier">
                   {formatTier(preview.tier)}
                   {preview.confidence ? (
@@ -69,12 +69,12 @@ export function GearshiftPopup() {
             <section aria-label="Last decision">
               <h3 className="mb-1 text-xs font-medium text-muted-foreground">Last decision</h3>
               {last ? (
-                <dl className="flex flex-col gap-1">
+                <dl className="flex w-full flex-col gap-1">
                   <Row label="Action">
                     <ActionBadge action={last.action} />
                   </Row>
                   <Row label="Model">
-                    {shortModel(last.requestedModel)} <span className="text-muted-foreground">→</span>{" "}
+                    {last.requestedLabel ?? shortModel(last.requestedModel)} <span className="text-muted-foreground">→</span>{" "}
                     {formatGear(last.routedLabel, last.routedEffort) ?? shortModel(last.routedModel)}
                   </Row>
                   <Row label="Why">{last.reason}</Row>

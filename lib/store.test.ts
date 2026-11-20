@@ -21,8 +21,9 @@ const row = (o: Partial<NewDecision> = {}): NewDecision => ({
 
 describe("migrations", () => {
   it("only ever append: shipped statements keep their place", () => {
-    expect(MIGRATIONS[MIGRATIONS.length - 3]).toMatch(/routed_service_tier TEXT/);
-    expect(MIGRATIONS.at(-2)).toMatch(/CREATE TABLE queued_links/);
+    expect(MIGRATIONS[4]).toMatch(/routed_service_tier TEXT/);
+    expect(MIGRATIONS[5]).toMatch(/CREATE TABLE queued_links/);
+    expect(MIGRATIONS[7]).toMatch(/CREATE TABLE runs/);
     expect(MIGRATIONS[0]).toMatch(/^CREATE TABLE decisions/);
   });
   it("fingerprints ignore whitespace but not threads", () => {
