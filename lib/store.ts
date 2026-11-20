@@ -27,14 +27,18 @@ export const MIGRATIONS: string[] = [
   status TEXT NOT NULL DEFAULT 'running', started_at INTEGER NOT NULL, ended_at INTEGER)`,
   `CREATE UNIQUE INDEX runs_child ON runs(child_thread_id)`,
   `CREATE INDEX runs_started ON runs(started_at)`,
+  // A child whose last turn crossed its budget is finished, not stopped: it keeps counting as over budget.
+  `ALTER TABLE runs ADD COLUMN over_budget INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE runs ADD COLUMN model_label TEXT`,
 ];
 
 export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
 export interface RunRow {
   id: number; parent_thread_id: string; child_thread_id: string; role: string; tier: string; provider: string;
   model: string | null; effort: string | null; budget: number; spent: number; status: RunStatus; started_at: number; ended_at: number | null;
+  over_budget: number; model_label: string | null;
 }
-export type NewRun = Omit<RunRow, "id" | "spent" | "status" | "ended_at">;
+export type NewRun = Omit<RunRow, "id" | "spent" | "status" | "ended_at" | "over_budget" | "model_label"> & { model_label?: string | null };
 
 export interface DecisionRow {
   id: number; at: number; thread_id: string; project_id: string | null; provider_id: string; initiator: string; attempt: string;
@@ -130,7 +134,7 @@ export class Store {
   }
 
   insertRun(r: NewRun): number {
-    return Number(this.db.prepare(`INSERT INTO runs (parent_thread_id, child_thread_id, role, tier, provider, model, effort, budget, started_at) VALUES (@parent_thread_id,@child_thread_id,@role,@tier,@provider,@model,@effort,@budget,@started_at)`).run(r).lastInsertRowid);
+    return Number(this.db.prepare(`INSERT INTO runs (parent_thread_id, child_thread_id, role, tier, provider, model, model_label, effort, budget, started_at) VALUES (@parent_thread_id,@child_thread_id,@role,@tier,@provider,@model,@model_label,@effort,@budget,@started_at)`).run({ model_label: null, ...r }).lastInsertRowid);
   }
   runForChild(childThreadId: string): RunRow | undefined {
     return this.db.prepare(`SELECT * FROM runs WHERE child_thread_id=?`).get(childThreadId) as RunRow | undefined;
@@ -138,6 +142,27 @@ export class Store {
   /** Runs whose child may still be working. */
   openRuns(): RunRow[] {
     return this.db.prepare(`SELECT * FROM runs WHERE status IN ('running','nudged') ORDER BY id`).all() as RunRow[];
+  }
+  /** Atomically move a run from one of `from` to `to`. True only for the caller that made the transition. */
+  claimRun(id: number, from: readonly RunStatus[], to: RunStatus, f: Partial<Pick<RunRow, "ended_at" | "over_budget">> = {}): boolean {
+    const sets = ["status=@to", ...Object.keys(f).map((c) => `${c}=@${c}`)];
+    const marks = from.map((_, i) => `@f${i}`).join(",");
+    const params: Record<string, unknown> = { id, to, ...f };
+    from.forEach((v, i) => { params[`f${i}`] = v; });
+    return this.db.prepare(`UPDATE runs SET ${sets.join(",")} WHERE id=@id AND status IN (${marks})`).run(params).changes === 1;
+  }
+  openRunCount(parentThreadId?: string): number {
+    const q = parentThreadId ? this.db.prepare(`SELECT COUNT(*) n FROM runs WHERE status IN ('running','nudged') AND parent_thread_id=?`).get(parentThreadId) : this.db.prepare(`SELECT COUNT(*) n FROM runs WHERE status IN ('running','nudged')`).get();
+    return (q as { n: number }).n;
+  }
+  /** Open runs started before `before` are abandoned (their thread never reported back): mark them failed. */
+  failStale(before: number, now = Date.now()): number {
+    return this.db.prepare(`UPDATE runs SET status='failed', ended_at=? WHERE status IN ('running','nudged') AND started_at<?`).run(now, before).changes;
+  }
+  /** Tier of the newest medium-or-larger decision of the thread. */
+  lastNoteworthyTier(threadId: string): string | null {
+    const r = this.db.prepare(`SELECT tier FROM decisions WHERE thread_id=? AND tier IN ('medium','large','xlarge') ORDER BY id DESC LIMIT 1`).get(threadId) as { tier: string } | undefined;
+    return r?.tier ?? null;
   }
   patchRun(id: number, f: Partial<Pick<RunRow, "spent" | "status" | "ended_at">>): void {
     const cols = Object.keys(f);

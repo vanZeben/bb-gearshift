@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeMessageDispatchHookContext, makeQueueEntry, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
 import { CLAUDE_CATALOG, CODEX_CATALOG } from "./fixtures";
+import { Store, fingerprint } from "./store";
 
 type Row = ReturnType<typeof makeQueueEntry>;
 const PROVIDER = "claude-code";
@@ -26,7 +27,7 @@ async function setup(o: Opts = {}) {
     return queue.get(r.id);
   });
   const { bb, harness } = createFakePluginHost({
-    pluginId: "gearshift",
+    pluginId: "gearshift", agentSkillIds: ["gearshift"],
     ...(o.settings ? { settings: o.settings } : {}),
     sdk: {
       providers: { models: o.models ?? (async () => ({ models: sdkModels })) },
@@ -228,15 +229,19 @@ describe("route note", () => {
     expect(noteBlocks(s.queue.get("q1"))).toHaveLength(0);
   });
 
-  it("a note-only hold (manual pick) waits, then releases on re-attempt", async () => {
+  it("never holds a manual pick just for a note", async () => {
     const s = await setup();
-    const res = await s.hook(s.ctx(MEDIUM, { executionSources: { model: "explicit" } }));
-    expect(res).toMatchObject({ action: "wait", reason: "Adding the team note" });
-    const r = s.row("q1", MEDIUM);
-    await s.queued(r); await s.flush();
-    expect(s.update.mock.calls[0]![0].model).toBeUndefined();
-    expect(noteBlocks(s.queue.get("q1"))).toHaveLength(1);
-    expect(await s.hook(s.ctx(MEDIUM, { queuedMessages: [s.queue.get("q1")] }))).toEqual({ action: "proceed" });
+    expect(await s.hook(s.ctx(MEDIUM, { executionSources: { model: "explicit" } }))).toEqual({ action: "proceed" });
+  });
+
+  it("strips our note and agent-only blocks before classifying and fingerprinting", async () => {
+    const s = await setup();
+    const note = "[gearshift] tier=medium · refactor the entire architecture across every service";
+    await s.hook(s.ctx(MEDIUM, { input: { text: `${MEDIUM}\n\n${note}`, blocks: [{ type: "text", text: MEDIUM, mentions: [] }, { type: "text", text: note, mentions: [], visibility: "agent-only" }] } }));
+    expect(s.decisions()[0]!.fingerprint).toBe(fingerprint(T, MEDIUM));
+    const s2 = await setup();
+    await s2.hook(s2.ctx(MEDIUM, { input: { text: `${MEDIUM}\n\n${note}`, blocks: [] } }));
+    expect(s2.decisions()[0]!.fingerprint).toBe(fingerprint(T, MEDIUM));
   });
 });
 
@@ -272,6 +277,55 @@ describe("gearshift_spawn", () => {
     expect(a).toMatchObject({ providerId: "codex", model: "gpt-6" });
     expect(a.executionInputSources.providerId).toBe("explicit");
     expect((s.db.prepare("SELECT provider FROM runs").get() as { provider: string }).provider).toBe("codex");
+  });
+
+  const insertRun = (db: any, parent: string, child: string, status = "running") =>
+    db.prepare("INSERT INTO runs (parent_thread_id, child_thread_id, role, tier, provider, model, effort, budget, started_at, status) VALUES (?,?,?,?,?,?,?,?,?,?)").run(parent, child, "qa", "medium", PROVIDER, "m", "low", 1000, Date.now(), status);
+  const call = (s: any, threadId = T) => s.harness.behavior.callAgentTool("gearshift_spawn", { role: "qa", prompt: "x" }, { threadId } as never);
+
+  it("refuses grandchildren, over-cap spawns and spawns while off, and hides the tool from run children", async () => {
+    const s = await spawnSetup();
+    insertRun(s.db, "p0", T);
+    expect(JSON.stringify(await call(s))).toMatch(/cannot spawn sub-agents/);
+    const cfg = (id: string) => s.harness.behavior.resolveAgentConfiguration({ thread: { id, title: null, parentThreadId: null, sourceThreadId: null }, provider: { id: PROVIDER, model: "m" } } as never);
+    expect((await cfg(T)).tools).toHaveLength(0);
+    expect((await cfg("someone-else")).tools).toHaveLength(1);
+    s.db.prepare("DELETE FROM runs").run();
+    for (let i = 0; i < 6; i++) insertRun(s.db, T, `c${i}`);
+    expect(JSON.stringify(await call(s))).toMatch(/limit 6/);
+    s.db.prepare("DELETE FROM runs").run();
+    for (let i = 0; i < 20; i++) insertRun(s.db, `o${i}`, `g${i}`);
+    expect(JSON.stringify(await call(s))).toMatch(/limit 20/);
+    s.db.prepare("DELETE FROM runs").run();
+    await s.harness.behavior.callRpc("setThreadEnabled", { threadId: T, enabled: false });
+    expect(JSON.stringify(await call(s))).toMatch(/off for this thread/);
+    expect(s.spawn).not.toHaveBeenCalled();
+  });
+
+  it("skips routing only for the matching pending spawn, and uses the newest medium+ tier", async () => {
+    const s = await spawnSetup();
+    let during: unknown, other: unknown;
+    s.spawn.mockImplementation(async (a: Record<string, unknown>) => {
+      const mk = (model: string, parent: string) => s.ctx(SMALL, { thread: { id: "kid", providerId: PROVIDER, parentThreadId: parent }, executionSources: { model: "explicit" }, requestedExecution: { providerId: PROVIDER, model } });
+      during = await s.hook(mk(a.model as string, T));
+      other = await s.hook(mk("claude-opus-5-5", "someone-else"));
+      return { id: "child-1" };
+    });
+    await call(s);
+    expect(during).toEqual({ action: "proceed" });
+    expect(s.decisions().filter((d) => d.thread_id === "kid")).toHaveLength(1);
+    expect(other).toBeDefined();
+    expect((s.db.prepare("SELECT tier, model_label FROM runs").get() as any).tier).toBe("medium");
+    expect((s.db.prepare("SELECT model_label FROM runs").get() as any).model_label).toBeTruthy();
+  });
+
+  it("passes the parent's host when resolving another provider's catalog", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const models = async (a: Record<string, unknown>) => { seen.push(a); return { models: a.providerId === "codex" ? CODEX_CATALOG.map((m) => ({ id: m.id, displayName: m.displayName, isDefault: m.isDefault, supportedReasoningEfforts: m.efforts.map((reasoningEffort) => ({ reasoningEffort })), supportedServiceTiers: [] })) : sdkModels }; };
+    const s = await setup({ models });
+    await s.harness.behavior.callRpc("savePolicy", { overrides: { roles: { review: { gears: { "claude-code": { model: "gpt-6", effort: "medium", providerId: "codex" } } } }, teams: { medium: { roles: ["review"], summary: "x" } } } });
+    await s.hook(s.ctx(MEDIUM, { host: { id: "h1" } }));
+    expect(seen.find((c) => c.providerId === "codex")).toMatchObject({ hostId: "h1" });
   });
 
   it("refuses an unknown role without spawning", async () => {
@@ -318,6 +372,75 @@ describe("budget guard", () => {
     expect(g.run()).toMatchObject({ status: "stopped" });
     await g.emit("child-1");
     expect(g.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent ticks nudge and stop exactly once", async () => {
+    const g = await guardSetup();
+    g.setSpent(850);
+    await Promise.all([g.emit("child-1"), g.emit("child-1"), g.emit("child-1")]);
+    expect(g.send).toHaveBeenCalledTimes(1);
+    g.setSpent(1100);
+    await Promise.all([g.emit("child-1"), g.emit("child-1"), g.emit("child-1")]);
+    await g.flush();
+    expect(g.stop).toHaveBeenCalledTimes(1);
+    expect(g.send).toHaveBeenCalledTimes(2);
+    expect(new Store(g.db).claimRun(g.run().id, ["running", "nudged"], "stopped")).toBe(false);
+  });
+
+  const idle = async (g: any) => { await g.harness.behavior.emitThreadEvent("thread.idle" as never, { thread: makeThreadResponse({ id: "child-1" } as never), lastAssistantText: null } as never); await g.flush(); };
+  it("a child that crosses 100% on its final turn is done and over budget, not stopped", async () => {
+    const g = await guardSetup();
+    g.setSpent(1500);
+    await idle(g);
+    expect(g.stop).not.toHaveBeenCalled();
+    expect(g.send).not.toHaveBeenCalled();
+    expect(g.run()).toMatchObject({ status: "done", over_budget: 1 });
+    const o = await g.harness.behavior.callRpc("overview", { days: 1 }) as any;
+    expect(o.fanout.overBudget).toBe(1);
+  });
+
+  it("guards a resumed child again", async () => {
+    const g = await guardSetup();
+    g.setSpent(100);
+    await idle(g);
+    expect(g.run().status).toBe("done");
+    g.setSpent(1200);
+    await g.harness.behavior.emitThreadEvent("thread.active" as never, { thread: makeThreadResponse({ id: "child-1" } as never) } as never);
+    await g.flush();
+    expect(g.stop).toHaveBeenCalledTimes(1);
+    expect(g.run().status).toBe("stopped");
+  });
+
+  it("enforces mid-turn from context-window growth", async () => {
+    const send = vi.fn(async () => ({})), stop = vi.fn(async () => ({})), output = vi.fn(async () => ({ output: "x" }));
+    let used = 1000;
+    const events = { list: async () => [
+      { createdAt: 10, data: { contextWindowUsage: { usedTokens: used } } },
+      { createdAt: 5, data: { tokenUsage: { total: { inputTokens: 100, outputTokens: 0 } } } },
+      { createdAt: 4, data: { contextWindowUsage: { usedTokens: 1000 } } },
+    ] };
+    const s = await setup({ threads: { send, stop, output, events } });
+    s.db.prepare("INSERT INTO runs (parent_thread_id, child_thread_id, role, tier, provider, model, effort, budget, started_at) VALUES (?,?,?,?,?,?,?,?,?)").run(T, "child-1", "qa", "medium", PROVIDER, "m", "low", 1000, Date.now());
+    const emit = async () => { await s.harness.behavior.emitThreadEvent("experimental_thread.events" as never, { thread: makeThreadResponse({ id: "child-1" } as never), sequence: 1 } as never); await s.flush(); };
+    used = 1800; await emit(); // 100 + 800 = 900 -> nudge
+    expect(send).toHaveBeenCalledTimes(1); expect(stop).not.toHaveBeenCalled();
+    used = 2000; await emit(); // 1100 -> stop
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes runs of deleted, archived or failed children", async () => {
+    const g = await guardSetup();
+    await g.harness.behavior.emitThreadEvent("thread.deleted" as never, { thread: makeThreadResponse({ id: "child-1" } as never) } as never);
+    expect(g.run()).toMatchObject({ status: "failed" });
+    expect(g.stop).not.toHaveBeenCalled();
+  });
+
+  it("CLI spawn/on only for the caller's own thread or a descendant", async () => {
+    const g = await guardSetup();
+    const run = g.harness.inspection.registrations.cli!.run;
+    expect(await run(["on", "--thread", "elsewhere"], { threadId: "me" } as never)).toMatchObject({ exitCode: 1 });
+    expect(await run(["on", "--thread", "me"], { threadId: "me" } as never)).toMatchObject({ exitCode: 0 });
+    expect(await run(["on", "--thread", "elsewhere"], {} as never)).toMatchObject({ exitCode: 0 });
   });
 
   it("ignores threads that are not in runs", async () => {
