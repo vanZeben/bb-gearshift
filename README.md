@@ -52,6 +52,10 @@ A shift takes about a tenth of a second: bb holds the message for a moment, Gear
 
 "Small", "mid" and "large" are read from model names (`haiku`, `mini`, `flash`, `lite` are small; `opus`, `pro`, `ultra`, `max` are large), and the provider's default model is the mid gear. [The routing policy guide](docs/routing-policy.md) explains every signal behind the score and how to change it.
 
+## Sub-agents
+
+For medium and larger messages Gearshift adds a short note the agent sees (you do not) naming the team for that size and what each role runs on. The agent can then start sub-agents with the `gearshift_spawn` tool: an implementer on a mid model, QA on a small one, a review on the top one, even on another provider. Every sub-agent has a token budget; Gearshift nudges it at 80% and stops it at 100%, then reports to the parent thread. Teams, roles and budgets live in the **Teams** tab of the Routing policy editor, and the analytics page has a Sub-agents card. Turn the note off with "Add a team note to medium and larger messages".
+
 ## Install
 
 From bb: **Settings → Plugins**, search for **Gearshift**, and install.
@@ -142,6 +146,10 @@ There's no extra model call: no added latency, no tokens spent deciding, and not
 
 No. bb fixes a thread's provider when the thread starts, so Gearshift shifts between that provider's models.
 </details>
+
+### Does Gearshift route the sub-agents Claude Code's Agent tool starts?
+
+No. Claude Code's built-in Agent-tool sub-agents run inside the lead's own session and are not bb threads, so Gearshift cannot see or route them. Only sub-agents started with `gearshift_spawn` get a role's model and budget.
 
 ## Contributing
 

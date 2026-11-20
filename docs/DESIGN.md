@@ -402,6 +402,24 @@ preferred medium). Efforts clamp to what the model supports, never picking a
 provider-specific level such as `ultracode` implicitly. `serviceTier` applies only when the
 resolved model lists that tier in `supportedServiceTiers`.
 
+## Teams and sub-agents (`lib/team.ts`, `server.ts`)
+
+Policy schema (both are plain policy keys, merged like `gears`; roles replace per role name and per provider key):
+
+- `teams: Record<Tier, { summary: string; roles: string[] }>`: which roles a message of that tier gets. Every listed role must exist in `roles`.
+- `roles: Record<name, { gears: Record<providerId | "*", RoleGearSpec>; budget: Record<Tier, number> }>`. `RoleGearSpec` is a `GearSpec` plus `providerId?` (run the child on another provider) and `effortMediumUp?` (effort used from the medium tier up). `gears` is keyed by the parent thread's provider with `"*"` as fallback. `budget` is in spend tokens.
+- Spend tokens = input + cache writes + output + 0.1 x cache reads (`spendTokens`), from host token classes only.
+
+**Route note.** In `message.dispatch`, a first attempt from a user or agent whose tier is medium or larger (and whose action is shift, keep, hold or manual) gets one line, `formatRouteNote`: tier, score, team summary, each role with its resolved gear and budget. It is appended to the queued row as an agent-only text block through the same amend as a gear shift (`amendOne`), so the user never sees it. A row that already carries a `[gearshift]` block is never amended twice. When there is no gear change, the amend is note-only and the hook still waits once ("Adding the team note") and releases on re-attempt. Switch: `routeNotes`.
+
+**`gearshift_spawn`** (agent tool, `{role, prompt, title?}`): looks up the parent thread, takes the tier of its last decision (default medium), resolves the role through `roleTarget`/`resolveRole` against the target provider's catalog (a cross-provider role loads that provider's catalog), calls `threads.spawn` with `parentThreadId`, `environment: reuse`, the role's model/effort/service tier and `executionInputSources` all `explicit`, then inserts a `runs` row. The hook proceeds untouched for any thread in `runs` and for explicit-source children spawned in the last 5 s, so a child keeps the gear it was given.
+
+**Budget guard** (`guard`, on `experimental_thread.events` and `thread.idle`): only threads present in `runs` are looked at. It reads the latest `thread/tokenUsage/updated` total, stores `spent`, and acts through `guardAction`: at 80% it sets status `nudged` first, then steers the child once; at 100% it sets `stopped`, stops the child, reads its output and queues a `[gearshift] run report` to the parent. Idle with no breach marks the run `done`.
+
+**`runs` table**: `id, parent_thread_id, child_thread_id (unique), role, tier, provider, model, effort, budget, spent, status (running | nudged | done | stopped | failed), started_at, ended_at`. Pruned with the retention window except open runs. The analytics `fanout` block (lead vs sub-agent spend, by role, budget-used histogram, newest 20 runs) is built from it by `buildFanout`.
+
+**Host fallback** (`listModels`): the model catalog is host-scoped on some servers. With no environment or host, a plain `providers.models` call can fail ("Local host daemon is not initialized"), so the plugin then asks each host from `hosts.list()` in turn, connected ones first, and uses the first that lists models; it rethrows the first error only if none answers.
+
 ## Storage (`bb.storage.database()`, `lib/store.ts`)
 
 Append-only migrations (`bb.storage.migrate`). No message text is stored, only its
