@@ -368,7 +368,7 @@ describe("budget guard", () => {
     expect(g.send).toHaveBeenCalledTimes(2);
     const report = g.send.mock.calls[1]![0] as Record<string, any>;
     expect(report).toMatchObject({ threadId: T, senderThreadId: "child-1" });
-    expect(JSON.stringify(report.input)).toMatch(/stopped at its budget.*partial work/);
+    expect(JSON.stringify(report.input)).toMatch(/stopped mid-turn at its budget.*INCOMPLETE.*partial work/);
     expect(g.run()).toMatchObject({ status: "stopped" });
     await g.emit("child-1");
     expect(g.stop).toHaveBeenCalledTimes(1);
