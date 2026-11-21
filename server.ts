@@ -10,7 +10,7 @@ import { DEFAULT_POLICY, compilePolicy, ladderFor, removeOverridePath, resolvePo
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
-import { NOTE_PREFIX, formatBudget, formatRouteNote, gearLabel, guardAction, noteWorthy, providersFor, resolveRole, roleTarget, spendTokens } from "./lib/team";
+import { NOTE_PREFIX, teamRoles, formatBudget, formatRouteNote, gearLabel, guardAction, noteWorthy, providersFor, resolveRole, roleTarget, spendTokens } from "./lib/team";
 import { TIERS, type Tier } from "./lib/policy";
 
 export { rpcContract };
@@ -306,10 +306,10 @@ export default async function plugin(bb: BbPluginApi) {
     }
     return out;
   }
-  async function buildNote(tier: Tier, score: number | null, providerId: string, scope: { environmentId?: string | null; hostId?: string | null; projectId?: string | null }, parentCatalog: CatalogModel[] | null): Promise<string | null> {
+  async function buildNote(tier: Tier, score: number | null, signalIds: readonly string[], providerId: string, scope: { environmentId?: string | null; hostId?: string | null; projectId?: string | null }, parentCatalog: CatalogModel[] | null): Promise<string | null> {
     try {
-      const catalogs = await catalogsFor(compiled.policy.teams[tier].roles, providerId, tier, scope, parentCatalog);
-      return formatRouteNote({ tier, score, policy: compiled.policy, parentProviderId: providerId, catalogs });
+      const catalogs = await catalogsFor(teamRoles(compiled.policy, tier, signalIds), providerId, tier, scope, parentCatalog);
+      return formatRouteNote({ tier, score, signalIds, policy: compiled.policy, parentProviderId: providerId, catalogs });
     } catch (e) { bb.log.warn(`route note failed: ${String(e)}`); return null; }
   }
 
@@ -326,6 +326,8 @@ export default async function plugin(bb: BbPluginApi) {
       const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
       const tier = (store.lastNoteworthyTier(parentThreadId) as Tier | null) ?? "medium";
       const target = roleTarget(compiled.policy, roleName, parent.providerId, tier);
+      const allowed = [...compiled.policy.teams[tier].roles, ...store.lastSignalRoles(parentThreadId)];
+      if (target && !allowed.includes(roleName)) return fail(`Role "${roleName}" is not in this message's team. Roles: ${[...new Set(allowed)].join(", ")}`);
       if (!target) return fail(`Unknown role "${roleName}". Roles: ${Object.keys(compiled.policy.roles).join(", ")}`);
       const hostId = (parent as { hostId?: string | null }).hostId ?? null;
       const catalog = await catalogFor({ providerId: target.providerId, ...(target.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), hostId, projectId: parent.projectId });
@@ -506,7 +508,7 @@ export default async function plugin(bb: BbPluginApi) {
       });
       const wantsNote = compiled.policy.routing.routeNotes && ctx.attempt === "start-turn" && (ctx.initiator === "user" || ctx.initiator === "agent")
         && noteWorthy(d.tier) && ["shift", "keep", "hold"].includes(d.action); // a manual pick is never held just for a note
-      const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), Math.max(0, deadline - Date.now()), null) : null;
+      const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, d.classification.contributions.map((c) => c.id), providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), Math.max(0, deadline - Date.now()), null) : null;
       const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0, text);
       if (queued.length) store.linkQueued(id, threadId, queued.map((r) => r.id));
       changed(threadId);
@@ -532,7 +534,7 @@ export default async function plugin(bb: BbPluginApi) {
     const row: NewDecision = {
       at, thread_id: ctx.thread.id, project_id: ctx.thread.projectId, provider_id: ctx.thread.providerId, initiator: ctx.initiator,
       attempt: ctx.attempt, action: d.action, reason: d.reason, tier: d.tier, score: d.tier ? c.score : null, confidence: d.tier ? c.confidence : null,
-      signals: JSON.stringify(c.signals), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
+      signals: JSON.stringify(c.signals), signal_roles: JSON.stringify(d.tier ? teamRoles(compiled.policy, d.tier, c.contributions.map((x) => x.id)).slice(compiled.policy.teams[d.tier].roles.length) : []), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
       requested_model: ctx.requestedExecution.model, requested_effort: ctx.requestedExecution.reasoningLevel,
       routed_model: d.gear?.model ?? null, routed_effort: d.gear?.effort ?? null, routed_label: d.gear?.label ?? null, routed_service_tier: d.gear?.serviceTier ?? null,
       baseline_model: baseline, context_tokens: ctxTokens, amend_status: null,

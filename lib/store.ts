@@ -30,6 +30,8 @@ export const MIGRATIONS: string[] = [
   // A child whose last turn crossed its budget is finished, not stopped: it keeps counting as over budget.
   `ALTER TABLE runs ADD COLUMN over_budget INTEGER NOT NULL DEFAULT 0`,
   `ALTER TABLE runs ADD COLUMN model_label TEXT`,
+  // Roles a decision's signals added to its team (role names only, never message text).
+  `ALTER TABLE decisions ADD COLUMN signal_roles TEXT NOT NULL DEFAULT '[]'`,
 ];
 
 export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
@@ -47,7 +49,7 @@ export interface DecisionRow {
   routed_model: string | null; routed_effort: string | null; routed_label: string | null; routed_service_tier: string | null; baseline_model: string | null;
   context_tokens: number | null; latency_ms: number | null; queued_message_id: string | null; amend_status: string | null;
   turn_id: string | null; input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null;
-  cache_write_tokens: number | null; cost_usd: number | null; baseline_cost_usd: number | null;
+  cache_write_tokens: number | null; cost_usd: number | null; baseline_cost_usd: number | null; signal_roles?: string;
 }
 export type NewDecision = Omit<DecisionRow, "id" | "routed_service_tier" | "latency_ms" | "turn_id" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "cost_usd" | "baseline_cost_usd" | "queued_message_id"> &
   Partial<Pick<DecisionRow, "queued_message_id">> & { routed_service_tier?: string | null };
@@ -163,6 +165,11 @@ export class Store {
   lastNoteworthyTier(threadId: string): string | null {
     const r = this.db.prepare(`SELECT tier FROM decisions WHERE thread_id=? AND tier IN ('medium','large','xlarge') ORDER BY id DESC LIMIT 1`).get(threadId) as { tier: string } | undefined;
     return r?.tier ?? null;
+  }
+  /** Roles the signals of the thread's last noteworthy decision added to its team. */
+  lastSignalRoles(threadId: string): string[] {
+    const r = this.db.prepare(`SELECT signal_roles FROM decisions WHERE thread_id=? AND tier IN ('medium','large','xlarge') ORDER BY id DESC LIMIT 1`).get(threadId) as { signal_roles: string } | undefined;
+    try { return r ? (JSON.parse(r.signal_roles) as string[]) : []; } catch { return []; }
   }
   patchRun(id: number, f: Partial<Pick<RunRow, "spent" | "status" | "ended_at">>): void {
     const cols = Object.keys(f);

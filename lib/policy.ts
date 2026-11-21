@@ -55,6 +55,8 @@ export interface Policy {
   routing: { defaultOn: boolean; respectManualPicks: boolean; routeAgentMessages: boolean; holdAboveTokens: number; routeNotes: boolean };
   teams: Record<Tier, TeamSpec>;
   roles: Record<string, RoleSpec>;
+  /** Scoring class id -> roles that join the tier's team when that class contributed to the score. */
+  signalRoles: Record<string, string[]>;
   scoring: {
     trivial: { maxChars: number; patterns: string[] };
     continuation: { maxChars: number; patterns: string[] };
@@ -93,6 +95,7 @@ export const policySchema: z.ZodType<Policy> = z.object({
   routing: z.object({ defaultOn: z.boolean(), respectManualPicks: z.boolean(), routeAgentMessages: z.boolean(), holdAboveTokens: nonNeg, routeNotes: z.boolean() }),
   teams: z.object({ trivial: teamSchema(), small: teamSchema(), medium: teamSchema(), large: teamSchema(), xlarge: teamSchema() }),
   roles: z.record(z.string(), z.object({ gears: z.record(z.string(), roleGearSchema), budget: budgetSchema })),
+  signalRoles: z.record(z.string(), z.array(z.string().min(1))),
   scoring: z.object({
     trivial: z.object({ maxChars: nonNeg, patterns }),
     continuation: z.object({ maxChars: nonNeg, patterns }),
@@ -117,7 +120,7 @@ const DEFAULT_TEAMS: Record<Tier, TeamSpec> = {
   trivial: { summary: "answer directly, no sub-agents", roles: [] },
   small: { summary: "one implementer, run tests directly", roles: ["implement"] },
   medium: { summary: "implementers on disjoint files + qa + verify", roles: ["implement", "qa", "verify"] },
-  large: { summary: "lead plans; implementers; qa; review of the diff", roles: ["implement", "qa", "review"] },
+  large: { summary: "implementers; qa; review of the diff", roles: ["implement", "qa", "review"] },
   xlarge: { summary: "architecture plans first, then the large team", roles: ["architecture", "implement", "qa", "review"] },
 };
 const budgets = (trivial: number, small: number, medium: number, large: number, xlarge: number): Record<Tier, number> => ({ trivial, small, medium, large, xlarge });
@@ -125,15 +128,11 @@ const role = (claude: RoleGearSpec, star: RoleGearSpec, budget: Record<Tier, num
 const DEFAULT_ROLES: Record<string, RoleSpec> = {
   implement: role({ model: "sonnet", effort: "medium", effortMediumUp: "high" }, { model: "@medium", effort: "medium", effortMediumUp: "high" }, budgets(80_000, 160_000, 360_000, 700_000, 1_200_000)),
   research: role({ model: "sonnet", effort: "medium" }, { model: "@medium", effort: "medium" }, budgets(80_000, 150_000, 250_000, 300_000, 350_000)),
-  digest: role({ model: "sonnet", effort: "medium" }, { model: "@medium", effort: "medium" }, budgets(40_000, 60_000, 100_000, 150_000, 150_000)),
   explore: role({ model: "haiku", effort: "medium" }, { model: "@small", effort: "medium" }, budgets(100_000, 150_000, 250_000, 250_000, 250_000)),
   qa: role({ model: "haiku", effort: "low" }, { model: "@small", effort: "low" }, budgets(60_000, 80_000, 120_000, 150_000, 150_000)),
   verify: role({ model: "haiku", effort: "medium" }, { model: "@small", effort: "medium" }, budgets(60_000, 80_000, 120_000, 150_000, 150_000)),
-  triage: role({ model: "haiku", effort: "medium" }, { model: "@small", effort: "medium" }, budgets(30_000, 40_000, 60_000, 80_000, 80_000)),
   review: role({ model: "opus", effort: "medium" }, { model: "@large", effort: "medium" }, budgets(100_000, 150_000, 250_000, 300_000, 300_000)),
-  lead: role({ model: "opus", effort: "medium" }, { model: "@large", effort: "medium" }, budgets(100_000, 200_000, 300_000, 400_000, 500_000)),
   architecture: role({ model: "fable", effort: "high" }, { model: "@large", effort: "high" }, budgets(450_000, 450_000, 450_000, 500_000, 550_000)),
-  writing: role({ model: "fable", effort: "low" }, { model: "@large", effort: "low" }, budgets(60_000, 100_000, 150_000, 200_000, 250_000)),
 };
 
 export const DEFAULT_POLICY: Policy = {
@@ -295,6 +294,7 @@ export const DEFAULT_POLICY: Policy = {
   },
   "teams": DEFAULT_TEAMS,
   "roles": DEFAULT_ROLES,
+  "signalRoles": { "research": ["research"], "investigation": ["explore"] },
   "scoring": {
     "trivial": {
       "maxChars": 60,
@@ -431,7 +431,7 @@ function sortKeys(v: unknown): unknown {
   return v;
 }
 
-const NULLABLE = new Set(["prices", "serviceTierMultipliers", "gears", "roles"]);
+const NULLABLE = new Set(["prices", "serviceTierMultipliers", "gears", "roles", "signalRoles"]);
 const ROLE_GEARS = /^roles\.[^.]+\.gears$/;
 
 function deepMerge(base: unknown, over: unknown, path: string): unknown {
@@ -445,7 +445,7 @@ function deepMerge(base: unknown, over: unknown, path: string): unknown {
     const v = over[k];
     if (NULLABLE.has(path) || ROLE_GEARS.test(path) || /^gears\.[^.]+$/.test(path)) {
       if (v === null) { delete out[k]; continue; }
-      if (path === "prices" || path === "serviceTierMultipliers" || ROLE_GEARS.test(path) || /^gears\.[^.]+$/.test(path)) { out[k] = clone(v); continue; }
+      if (path === "prices" || path === "serviceTierMultipliers" || path === "signalRoles" || ROLE_GEARS.test(path) || /^gears\.[^.]+$/.test(path)) { out[k] = clone(v); continue; }
       // gears.<provider> and roles.<name>: merge per key
       out[k] = deepMerge(isObj(out[k]) ? out[k] : {}, v, sub);
       continue;
@@ -551,6 +551,9 @@ function formatPath(path: ReadonlyArray<PropertyKey>, raw: unknown): string {
   return out;
 }
 
+/** Contribution ids the classifier emits besides the policy's own classes. */
+const BUILTIN_SIGNAL_IDS = ["question", "unmatched", "components", "files", "length", "continuation", "trivial", "empty"];
+
 export function validatePolicy(policy: unknown): PolicyError[] {
   const errors: PolicyError[] = [];
   const parsed = policySchema.safeParse(policy);
@@ -579,6 +582,11 @@ export function validatePolicy(policy: unknown): PolicyError[] {
   });
   for (const t of TIERS) for (const r of p.teams[t].roles) {
     if (!p.roles[r]) errors.push({ path: `teams.${t}.roles`, message: `Unknown role "${r}"` });
+  }
+  const classIds = new Set([...BUILTIN_SIGNAL_IDS, ...p.scoring.classes.map((c) => c.id)]);
+  for (const [cls, list] of Object.entries(p.signalRoles)) {
+    if (!classIds.has(cls)) errors.push({ path: `signalRoles.${cls}`, message: `Unknown scoring class "${cls}"` });
+    for (const r of list) if (!p.roles[r]) errors.push({ path: `signalRoles.${cls}`, message: `Unknown role "${r}"` });
   }
   for (const [name, r] of Object.entries(p.roles)) {
     if (!/^[a-z][a-z0-9_-]*$/.test(name)) errors.push({ path: `roles.${name}`, message: "Role names are lowercase letters, digits, - or _" });
@@ -652,7 +660,7 @@ function diffObj(base: unknown, eff: unknown, path: string): unknown {
   for (const k of Object.keys(eff)) {
     const sub = path ? `${path}.${k}` : k;
     if (!(k in base)) { out[k] = clone(eff[k]); continue; }
-    if (path === "prices" || path === "serviceTierMultipliers" || ROLE_GEARS.test(path) || /^gears\.[^.]+$/.test(path)) {
+    if (path === "prices" || path === "serviceTierMultipliers" || path === "signalRoles" || ROLE_GEARS.test(path) || /^gears\.[^.]+$/.test(path)) {
       if (!deepEqual(base[k], eff[k])) out[k] = clone(eff[k]);
       continue;
     }
