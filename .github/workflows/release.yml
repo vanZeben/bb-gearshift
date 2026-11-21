@@ -168,7 +168,7 @@ jobs:
             echo "git clone --depth 1 --branch ${TAG} ${{ github.server_url }}/${{ github.repository }}.git gearshift"
             echo "(cd gearshift && npm ci --ignore-scripts)"
             echo "git clone https://github.com/get-bb/marketplace.git marketplace"
-            echo "node gearshift/scripts/marketplace-sync.mjs --tag ${TAG} --marketplace marketplace"
+            echo "node gearshift/scripts/marketplace-sync.mjs --repo gearshift --tag ${TAG} --marketplace marketplace"
             echo '```'
             echo
             echo "Then commit only this plugin's files in \`marketplace\`, run its \`npm run build\` and \`npm run check\`, push to your fork and open the pull request."

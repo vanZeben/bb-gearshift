@@ -2,6 +2,7 @@
 // Generate the get-bb/marketplace entry for this plugin from the repository (see docs/RELEASING.md).
 //
 //   node scripts/marketplace-sync.mjs --tag v0.1.0 --marketplace <checkout> [--repo <dir>] [--dry-run]
+//   --repo defaults to the repository this script is in, wherever it is run from.
 //
 // Prints a JSON summary { id, version, needsPullRequest, reasons, entry } on stdout.
 import { createHash } from "node:crypto";
@@ -193,8 +194,11 @@ export function write({ files, stale }, marketplaceDir) {
   }
 }
 
-function parseArgs(argv) {
-  const out = { repo: process.cwd(), dryRun: false };
+/** The plugin repository this script belongs to (its parent directory), the default for --repo. */
+export const SCRIPT_REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+export function parseArgs(argv) {
+  const out = { repo: SCRIPT_REPO, dryRun: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") out.dryRun = true;
