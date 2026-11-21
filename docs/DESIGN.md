@@ -336,7 +336,7 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
       { "id": "large", "label": "large build", "floor": 9, "patterns": [
         "(?<!\\b(?:the|fix|ci|nightly|a broken) )\\bbuild(?:ing)?\\b(?!\\s+(?:is|was|fails?|failed|failing|broke|broken|errors?|logs?|step|output|time)\\b)",
         "\\bport(?:ing)? (?:\\w+ ){0,3}(?:to|into|from)\\b",
-        "\\b(?:redesign|refactor\\w*|migrat\\w*|architect\\w*|overhaul|rewrite|re-?implement)\\b",
+        "\\b(?:redesign|refactor\\w*|migrat(?:e[sd]?|ing)|architect\\w*|overhaul|rewrite|re-?implement)\\b",
         "\\bend[- ]to[- ]end\\b",
         "\\bfrom scratch\\b",
         "\\b(?:new|design (?:a|the)) (?:system|service|app|plugin|platform)\\b"
@@ -353,7 +353,7 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
       "groups": {
         "backend": "\\b(?:backend|endpoint|api|controller|server|service|handler)\\b",
         "frontend": "\\b(?:frontend|ui|ux|page|component|modal|button|css|react|vue|svelte)\\b",
-        "data": "\\b(?:database|schema|table|column|migration|query|sql)\\b",
+        "data": "\\b(?:database|schema|table|column|migrations?|query|sql)\\b",
         "auth": "\\b(?:permissions?|roles?|access control)\\b",
         "tests": "\\b(?:tests?|specs?|e2e|coverage)\\b",
         "infra": "\\b(?:deploy\\w*|ci|pipeline|docker|kubernetes|k8s|terraform|helm)\\b",
@@ -387,6 +387,7 @@ Worked examples with the defaults (keep these as tests):
 | "fix the typo in the README" | 3 | small |
 | "fix the build" | 3 | small (not a large build) |
 | "why is the dashboard slow?" | 4 (question 1 + investigation 3; one component) | small |
+| "delete the old migration files" | 5 (change 3 + risk 2; "migration" is a noun, not the large-build verb) | small |
 | "research which models are good for which tasks" | 6 | medium |
 | "the login is flaky" | 8 (unmatched 3 + investigation 3 + risk 2) | medium |
 | "port the billing service into a plugin" | 9+ | large |
