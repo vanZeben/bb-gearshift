@@ -24,9 +24,12 @@
 
 A "thanks" doesn't need the top model at maximum effort, and a multi-file refactor shouldn't run on the smallest one. Gearshift reads each message as you send it, scores how much work it asks for, and shifts the thread to the gear that fits: a small, fast model for quick asks, the top model with more thinking for big builds. You see the gear before you send, and you can turn it off for any thread.
 
+It also orchestrates. For a medium or larger message, Gearshift tells the agent which sub-agents to start (an implementer on a mid model, QA on a small one, a review on the top one), starts them on those models, and caps what each can spend. See [Sub-agents](#sub-agents).
+
 ## Why Gearshift
 
 - **Pay for the work, not the habit.** Most messages in a coding session are follow-ups, acknowledgements and small fixes. Gearshift sends them to a cheaper gear and saves the top model for the work that needs it.
+- **Orchestrates sub-agents.** Medium and larger messages come with a team: implementers, QA, review, even on another provider. Each sub-agent runs on its role's model with a token budget, and Gearshift stops it at the limit. Big work gets split across the right models instead of running on one.
 - **Never wastes your cache.** Prompt caches belong to one model. Moving a long thread to a cheaper model makes it re-read its whole context uncached, which can cost more than the reply saves. Gearshift holds long threads on their current model and only shifts them up.
 - **Works on every provider.** Built-in gears for Claude Code and Codex, and size-based gears for Pi, ACP agents and any other provider. Gears follow the provider's live model list, so new model releases are picked up without an update.
 - **No extra model call.** Scoring is a handful of local rules: well under a millisecond, nothing sent anywhere, no hidden classification turn.
@@ -54,7 +57,39 @@ A shift takes about a tenth of a second: bb holds the message for a moment, Gear
 
 ## Sub-agents
 
-For medium and larger messages Gearshift adds a short note the agent sees (you do not) naming the team for that size and what each role runs on. The agent can then start sub-agents with the `gearshift_spawn` tool: an implementer on a mid model, QA on a small one, a review on the top one, even on another provider. Every sub-agent has a token budget; Gearshift nudges it at 80% and stops it at 100%, then reports to the parent thread. Teams, roles and budgets live in the **Teams** tab of the Routing policy editor, and the analytics page has a Sub-agents card. Turn the note off with "Add a team note to medium and larger messages".
+Routing picks the model for the message you send. Orchestration picks the models for the work that message turns into. For medium and larger messages, Gearshift lets the agent split the work across sub-agents, each on the gear its role needs.
+
+<p align="center"><img src="docs/assets/diagrams/subagents.svg" width="100%" alt="How Gearshift orchestrates sub-agents. A medium or larger message gets an agent-only route note naming the team, each role's gear and its budget. The lead agent starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear. The budget guard reads each child's token usage, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread."></p>
+
+**What the agent sees.** A short note on the message, invisible in the chat, for example:
+
+```text
+[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → Opus 5.5 · medium (budget 300k) · spawn sub-agents with the gearshift_spawn tool
+```
+
+The agent starts a sub-agent with the `gearshift_spawn` tool: a role, a prompt and an optional title. Gearshift creates a child thread on that role's model, effort and service tier, and the child reports back to the lead when it finishes. The agent can only spawn the roles in its note: the tier's team, plus research (on a research signal such as "compare" or "benchmark") and explore (on an investigation signal such as "flaky" or "root cause"). Sub-agents keep the gear they were given and are never re-routed.
+
+**Default teams.**
+
+| Tier | Team | Roles |
+|---|---|---|
+| trivial | answer directly, no sub-agents | none |
+| small | one implementer, run tests directly | implement |
+| medium | implementers on disjoint files + qa + verify | implement, qa, verify |
+| large | implementers; qa; review of the diff | implement, qa, review |
+| xlarge | architecture plans first, then the large team | architecture, implement, qa, review |
+
+On Claude Code, `implement` runs on Sonnet (medium effort, high from medium up), `qa` and `verify` on Haiku, `review` on Opus and `architecture` on the top model. Other providers use the small, mid and large model classes. The default roles and their budgets per tier are in [the routing policy guide](docs/routing-policy.md#teams-and-sub-agents).
+
+**Budgets.** Every sub-agent has a token budget that depends on its role and the message's tier, for example 700k for an `implement` run on a large message and 150k for `qa`. Spend counts input, cache writes and output tokens, plus a tenth of cache reads. At 80% Gearshift tells the sub-agent to wrap up and report what is done and what is left. At 100% it stops the thread and sends a run report to the lead, marked incomplete, with the sub-agent's last output. Enforcement follows bb's event cadence, about once a second, so a run can overshoot: a live test stopped a 30k-budget run at 41k. At real budgets (100k and up) the overshoot is small.
+
+**Other providers.** A role can run on a different provider than the lead, for example a review on Codex while the lead runs on Claude Code. Set a provider override on the role's gear in the Teams tab.
+
+**See and edit it.** Teams, roles, gears and budgets live in the **Teams** tab of the Routing policy editor. The analytics page has a **Sub-agents** card: lead against sub-agent spend, runs by role, how much of its budget each run used, and the most recent runs.
+
+**Turn it off.** Switch off **Add a team note to medium and larger messages** and the agent is no longer told the team or its roles, so it has nothing to orchestrate with (`bb plugin config gearshift set routeNotes false` does the same). Turning Gearshift off for a thread also stops it spawning there.
+
+**Not covered.** Claude Code's built-in Agent tool starts sub-agents inside the lead's own session. They are not bb threads, so Gearshift cannot see or route them. Only sub-agents started with `gearshift_spawn` get a role's model and budget. [How it works](docs/how-it-works.md#sub-agents) has the internals.
 
 ## Install
 
@@ -73,7 +108,8 @@ Gearshift needs bb 0.50 or later. It has no account, API key or external service
 1. **Send a message in any thread.** The gear pill next to the send button shows where it will run, for example `Auto · Sonnet 5.5 · High`, and updates as you type.
 2. **Click the pill** to see why: the score, the signals that matched, and the last shift. The switch there turns Gearshift off for that thread.
 3. **Open Gearshift in the sidebar** for the analytics page: messages routed, shift rate, tier and model mix, daily cost against always using the top gear, and recent decisions.
-4. **Tune it** in **Settings → Plugins → Gearshift**. The **Try a message** box shows how a draft would route before you save.
+4. **Try orchestration.** Send a medium or larger task, such as "port the billing service into a plugin". The agent gets a team note and can start sub-agents. Open **Gearshift** in the sidebar and look at the **Sub-agents** card for their spend, and at the **Teams** tab in the policy editor to change who runs on what.
+5. **Tune it** in **Settings → Plugins → Gearshift**. The **Try a message** box shows how a draft would route before you save.
 
 ## Configuration
 
@@ -86,6 +122,7 @@ Everything is an ordinary setting in **Settings → Plugins → Gearshift**. The
 | A model picked by hand wins | on | If you change the model picker before sending, that message keeps your choice. |
 | Route messages from other agents | on | Also route messages that other agents send into a thread. |
 | Don't downshift above this many context tokens | 60,000 | Keeps long threads on their current model so their cache isn't wasted. 0 turns this off. |
+| Add a team note to medium and larger messages | on | Tells the agent which sub-agent roles to spawn and on what. Off means no orchestration prompts. |
 | Days of history kept | 90 | Routing history used by the analytics page. |
 
 Below them, the **Routing policy** editor sets the gears for each provider (model, effort and service tier per tier), the scoring signals and score bands, with Gearshift's defaults filled in. Your changes sit on top of the defaults, so you keep getting improved defaults for everything you didn't change. See [the routing policy guide](docs/routing-policy.md).
@@ -147,9 +184,11 @@ There's no extra model call: no added latency, no tokens spent deciding, and not
 No. bb fixes a thread's provider when the thread starts, so Gearshift shifts between that provider's models.
 </details>
 
-### Does Gearshift route the sub-agents Claude Code's Agent tool starts?
+<details>
+<summary><b>Does Gearshift route the sub-agents Claude Code's Agent tool starts?</b></summary>
 
 No. Claude Code's built-in Agent-tool sub-agents run inside the lead's own session and are not bb threads, so Gearshift cannot see or route them. Only sub-agents started with `gearshift_spawn` get a role's model and budget.
+</details>
 
 ## Contributing
 

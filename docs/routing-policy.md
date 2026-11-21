@@ -190,7 +190,21 @@ Default roles on Claude Code (other providers use the size classes `@small`, `@m
 
 The agent can only spawn roles listed in its note: the tier's team plus any signal roles. There is no `lead` role: the lead is the thread itself, and its model is the tier's gear (Gears tab). Add your own roles, or remove default ones, in the Teams tab.
 
-A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed.
+A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed. [How it works](how-it-works.md#sub-agents) covers the internals: the route note, `gearshift_spawn`, the budget guard and the run report.
+
+### Tuning teams, roles and budgets
+
+All in the **Teams** tab. Budgets are in thousands of tokens.
+
+**Add a role.** Under Roles, type a name (lowercase letters, digits, `-` or `_`, such as `docs`) and add it. Give it a gear for `*` (every provider) and a budget per tier. Then tick it in the tiers whose team should include it, or under Signal roles so it joins when a signal fires. A role that is in no team and no signal cannot be spawned.
+
+**Run a role on another provider.** Open the role's gear and set the provider override, for example `review` on Codex while the lead runs on Claude Code. Pick the model from that provider's list. The route note then shows the role as `review → <model> on <provider>`.
+
+**Raise a budget.** Change the role's number for the tier, for example `implement` at large from 700 to 1000. Runs stop at 100%, so raise it if reports keep coming back incomplete. Keep it at 100 or more: enforcement is about once a second, so a very small budget overshoots by a lot.
+
+**Change who joins a team.** Untick a role in a tier to drop it (untick everything for a tier that answers directly), or tick one to add it.
+
+**Turn the note off.** Switch off **Add a team note to medium and larger messages** in the plugin settings, or run `bb plugin config gearshift set routeNotes false`. The agent is then not told the team or its roles. To stop spawning in one thread, turn Gearshift off for it.
 
 ## When Gearshift does not shift
 

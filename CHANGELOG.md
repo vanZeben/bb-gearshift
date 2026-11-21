@@ -13,6 +13,10 @@ All notable changes to Gearshift are recorded here. The format follows
 - The reason shown for a shift uses the same labels as the rest of the UI ("X-large task … → Opus 5.5 · XHigh", not "Xlarge task … · xhigh").
 - The Routing policy tabs no longer show a stray vertical scrollbar.
 
+### Changed
+
+- The agent skill and the docs now treat sub-agent orchestration as a core feature: a Sub-agents section and diagram in the README and "How it works", tuning recipes for teams, roles and budgets, and guidance for agents on when to spawn, how to brief a sub-agent and how to read a run report.
+
 ## [0.2.1] - 2026-11-20
 
 ### Changed
