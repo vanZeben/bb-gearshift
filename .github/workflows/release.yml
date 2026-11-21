@@ -63,6 +63,15 @@ jobs:
             exit 1
           fi
 
+      # better-sqlite3 (a dev dependency for the tests) ships no prebuilt binaries, so npm ci
+      # compiles it. GitHub-hosted runners have a compiler; the self-hosted runner image may not.
+      - name: Ensure a C/C++ toolchain
+        run: |
+          if ! command -v make >/dev/null || ! command -v g++ >/dev/null; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends build-essential
+          fi
+
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
@@ -98,7 +107,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # The sync script needs only plain JavaScript dependencies: skip native builds.
+      - run: npm ci --ignore-scripts
 
       - name: Ensure the GitHub CLI
         run: |
