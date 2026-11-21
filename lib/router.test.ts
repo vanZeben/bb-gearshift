@@ -67,7 +67,11 @@ describe("rules in order", () => {
     const d = decide(base());
     expect(d).toMatchObject({ action: "shift", tier: "small", needsAmend: true });
     expect(d.gear).toMatchObject({ model: "claude-sonnet-5-5", effort: "medium" });
-    expect(d.reason).toBe("Small task (change) → Sonnet 5.5 · medium");
+    expect(d.reason).toBe("Small task (change) → Sonnet 5.5 · Medium");
+  });
+  it("12: the reason uses the same tier and effort labels as the UI", () => {
+    const d = decide(base({ text: BIG_BUILD }));
+    expect(d.reason).toMatch(/^X-large task \(.+\) → Opus 5\.5 · XHigh$/);
   });
 });
 
