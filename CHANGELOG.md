@@ -6,6 +6,8 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-20
+
 ### Fixed
 
 - The noun "migration" no longer triggers the large-build floor: only the verb forms (migrate, migrates, migrated, migrating) do, so "delete the old migration files" scores small instead of large. "migration(s)" counts toward the data area.
@@ -66,7 +68,8 @@ First release.
   and model mix, daily cost, model transitions and recent decisions.
 - `bb gearshift` command (`status`, `on`, `off`, `explain`, `policy`) and an agent skill.
 
-[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/vanZeben/bb-gearshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vanZeben/bb-gearshift/releases/tag/v0.1.0
