@@ -6,6 +6,8 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-20
+
 ### Added
 
 - Sub-agent routing: policy `teams` (roles per tier) and `roles` (gear per provider, budget per tier), an agent-only route note on medium and larger messages, and the `gearshift_spawn` tool that starts a child thread on a role's gear, including on another provider.
@@ -45,5 +47,6 @@ First release.
   and model mix, daily cost, model transitions and recent decisions.
 - `bb gearshift` command (`status`, `on`, `off`, `explain`, `policy`) and an agent skill.
 
-[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vanZeben/bb-gearshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vanZeben/bb-gearshift/releases/tag/v0.1.0
