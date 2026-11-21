@@ -138,8 +138,44 @@ jobs:
             echo "The marketplace entry does not need to change. Users receive ${TAG} through the entry's existing version range with \`bb plugin update\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Check for the release token
+        id: token
+        env:
+          RELEASE_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+        run: |
+          if [ -n "$RELEASE_TOKEN" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      # Without the token the release is still complete: users get it through the entry's version
+      # range once the entry exists. Only the marketplace pull request is left, for the listing's
+      # author to open by hand (docs/RELEASING.md, "Without the release token").
+      - name: Marketplace pull request needed (no release token)
+        if: steps.sync.outputs.needs_pr == 'true' && steps.token.outputs.present != 'true'
+        run: |
+          set -euo pipefail
+          reasons=$(node -p "require('$RUNNER_TEMP/sync.json').reasons.map((r) => '- ' + r).join('\n')")
+          author=$(node -p "require('./marketplace/listing.json').author.github")
+          echo "::notice title=Marketplace pull request not opened::GEARSHIFT_RELEASE_TOKEN is not set. Open the marketplace pull request for ${TAG} by hand from the ${author} account: see docs/RELEASING.md."
+          {
+            echo "## Release ${TAG} verified: marketplace pull request still to open"
+            echo
+            echo "The marketplace entry needs a pull request:"
+            echo
+            echo "${reasons}"
+            echo
+            echo "\`GEARSHIFT_RELEASE_TOKEN\` is not set, so this workflow did not open it. Open it from the **${author}** account (the listing's \`author.github\`), as [docs/RELEASING.md](${{ github.server_url }}/${{ github.repository }}/blob/main/docs/RELEASING.md#without-the-release-token) describes:"
+            echo
+            echo '```sh'
+            echo "git clone --depth 1 --branch ${TAG} ${{ github.server_url }}/${{ github.repository }}.git gearshift"
+            echo "(cd gearshift && npm ci --ignore-scripts)"
+            echo "git clone https://github.com/get-bb/marketplace.git marketplace"
+            echo "node gearshift/scripts/marketplace-sync.mjs --tag ${TAG} --marketplace marketplace"
+            echo '```'
+            echo
+            echo "Then commit only this plugin's files in \`marketplace\`, run its \`npm run build\` and \`npm run check\`, push to your fork and open the pull request."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Open the marketplace pull request
-        if: steps.sync.outputs.needs_pr == 'true'
+        if: steps.sync.outputs.needs_pr == 'true' && steps.token.outputs.present == 'true'
         env:
           GH_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
           RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ needs.verify.outputs.tag }}

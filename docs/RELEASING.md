@@ -8,13 +8,14 @@ from `bb plugin update` (or the app's update prompt).
 ## The short version
 
 1. **Actions → Prepare release → Run workflow**, pick `patch`, `minor` or `major`.
-   It opens a pull request that bumps the version and creates a **draft release** with
+   It opens a pull request that bumps the version (without the release token it pushes the branch and links the pull request for you to open) and creates a **draft release** with
    generated notes.
 2. Merge the pull request.
 3. Open the draft release, edit the notes if you like, and **Publish release**.
 
 Publishing runs **Release**, which checks and builds the tagged commit and, when the
-marketplace entry needs to change, opens a pull request on `get-bb/marketplace`.
+marketplace entry needs to change, opens a pull request on `get-bb/marketplace`. Without the
+release token, see [Without the release token](#without-the-release-token).
 
 ## When the marketplace needs a pull request
 
@@ -84,6 +85,47 @@ manual workflow. The scale set's pods use a service account with no Kubernetes p
 
 | Secret | What it is |
 |---|---|
-| `GEARSHIFT_RELEASE_TOKEN` | A classic personal access token with the `public_repo` scope, from the GitHub account named in `marketplace/listing.json` `author.github`. Used to open the version-bump pull request (so CI runs on it) and to fork `get-bb/marketplace` and open the marketplace pull request: the marketplace identifies an entry's owner by the account that submits it. |
+| `GEARSHIFT_RELEASE_TOKEN` | Optional. A classic personal access token with the `public_repo` scope, from the GitHub account named in `marketplace/listing.json` `author.github`. Used to open the version-bump pull request (so CI runs on it) and to fork `get-bb/marketplace` and open the marketplace pull request: the marketplace identifies an entry's owner by the account that submits it. |
 
-The built-in `GITHUB_TOKEN` creates the draft release.
+The built-in `GITHUB_TOKEN` creates the draft release, and pushes the release branch when the
+release token is not set.
+
+## Without the release token
+
+Both workflows work without `GEARSHIFT_RELEASE_TOKEN`; they just stop short of the steps that need
+the listing author's account.
+
+- **Prepare release** pushes the `release/vX.Y.Z` branch and creates the draft release, but does
+  not open the pull request (one opened with the built-in token would not run CI). Its summary
+  links the pull request: open it, wait for CI, merge.
+- **Release** verifies and builds the tag as usual. When the marketplace entry needs a pull request,
+  it does not open one: it adds a notice and a summary with the reasons and the commands below.
+  The release itself is complete; for an entry that already exists, users receive it through the
+  entry's version range.
+
+To open the marketplace pull request by hand, from the account in `author.github`:
+
+```sh
+TAG=vX.Y.Z
+git clone --depth 1 --branch "$TAG" https://github.com/vanZeben/bb-gearshift.git gearshift
+(cd gearshift && npm ci --ignore-scripts)
+git clone https://github.com/get-bb/marketplace.git marketplace   # full history: the build reads entry dates from git
+node gearshift/scripts/marketplace-sync.mjs --tag "$TAG" --marketplace marketplace
+
+cd marketplace
+git checkout -b "gearshift-$TAG"
+git add -A -- entries/gearshift.json 'icons/gearshift-*' overview/gearshift.md screenshots/gearshift
+git status --porcelain            # only this plugin's files
+git commit -m "Update Gearshift to $TAG"   # "Add plugin entry: gearshift" for the first entry
+npm ci --ignore-scripts && npm run build && npm run check
+
+gh repo fork get-bb/marketplace --clone=false
+git remote add fork "https://github.com/$(gh api user --jq .login)/marketplace.git"
+git push -u fork "gearshift-$TAG"
+gh pr create --repo get-bb/marketplace --base main --head "$(gh api user --jq .login):gearshift-$TAG"
+```
+
+Commit with the account's public `noreply` address if you don't want your usual email in the
+marketplace history. The pull request body should say what the plugin does, the source and range,
+the checks that passed, its permissions, and what each screenshot shows; the Release workflow's
+generated body in `.github/workflows/release.yml` is a template.

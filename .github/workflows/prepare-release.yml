@@ -16,19 +16,20 @@ jobs:
   prepare:
     runs-on: arc-bb-gearshift
     steps:
-      - name: Check the release token
+      # The release token lets the bump pull request run CI (pull requests opened with the built-in
+      # token don't trigger workflows). Without it the branch is pushed and the summary links the
+      # pull request for a maintainer to open.
+      - name: Check for the release token
+        id: token
         env:
           RELEASE_TOKEN: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
         run: |
-          if [ -z "$RELEASE_TOKEN" ]; then
-            echo "::error::The repository secret GEARSHIFT_RELEASE_TOKEN is not set. See docs/RELEASING.md (Secrets)."
-            exit 1
-          fi
+          if [ -n "$RELEASE_TOKEN" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
 
       - uses: actions/checkout@v7
         with:
           ref: main
-          token: ${{ secrets.GEARSHIFT_RELEASE_TOKEN }}
+          token: ${{ secrets.GEARSHIFT_RELEASE_TOKEN || github.token }}
 
       - uses: actions/setup-node@v7
         with:
@@ -93,9 +94,19 @@ jobs:
           git add package.json package-lock.json
           git commit -m "Release v${NEXT}"
           git push origin "release/v${NEXT}"
-          gh pr create --base main --head "release/v${NEXT}" \
-            --title "Release v${NEXT}" \
-            --body "Bumps the version to ${NEXT}. Merge this, then publish the draft release v${NEXT}. See docs/RELEASING.md."
+          if [ -n "$GH_TOKEN" ]; then
+            gh pr create --base main --head "release/v${NEXT}" \
+              --title "Release v${NEXT}" \
+              --body "Bumps the version to ${NEXT}. Merge this, then publish the draft release v${NEXT}. See docs/RELEASING.md."
+          else
+            url="${{ github.server_url }}/${{ github.repository }}/compare/main...release/v${NEXT}?expand=1"
+            echo "::notice title=Open the release pull request::GEARSHIFT_RELEASE_TOKEN is not set, so the pull request was not opened. Open it: ${url}"
+            {
+              echo "**Open the release pull request:** [main ← release/v${NEXT}](${url})"
+              echo "(GEARSHIFT_RELEASE_TOKEN is not set. A pull request you open yourself runs CI.)"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create the draft release
         env:
@@ -112,7 +123,7 @@ jobs:
           {
             echo "## Release v${NEXT} prepared (from ${CURRENT})"
             echo
-            echo "1. Merge the pull request **Release v${NEXT}**."
+            echo "1. Merge the pull request **Release v${NEXT}** (open it first if the step above linked it)."
             echo "2. Open the draft release **v${NEXT}**, edit the notes if you like, and **Publish release**."
             echo
             echo "Publishing runs the Release workflow."
