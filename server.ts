@@ -429,7 +429,7 @@ export default async function plugin(bb: BbPluginApi) {
         if (!store.claimRun(run.id, ["running", "nudged"], "stopped", { ended_at: Date.now(), over_budget: 1 })) return;
         await bounded(bb.sdk.threads.stop({ threadId: childId }), PROVIDER_MS, null);
         const out = await bounded(bb.sdk.threads.output({ threadId: childId }), PROVIDER_MS, null);
-        const report = `${NOTE_PREFIX} run report: ${run.role} sub-agent ${childId} stopped at its budget (${formatBudget(run.spent)}/${formatBudget(run.budget)} tokens). Its last output: ${clip(out?.output ?? null, 1500)}`;
+        const report = `${NOTE_PREFIX} run report: ${run.role} sub-agent ${childId} was stopped mid-turn at its budget (${formatBudget(run.spent)}/${formatBudget(run.budget)} tokens). Its work is INCOMPLETE: the output below was cut off and may end mid-sentence. Decide whether to finish the remaining work yourself, re-spawn with a smaller task, or raise the role's budget. Last output (truncated): ${clip(out?.output ?? null, 1500)}`;
         await bounded(bb.sdk.threads.send({ threadId: run.parent_thread_id, mode: "queue-if-active", input: textInput(report), senderThreadId: childId } as never), PROVIDER_MS, null);
       }
       changed(run.parent_thread_id);
