@@ -6,6 +6,10 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The noun "migration" no longer triggers the large-build floor: only the verb forms (migrate, migrates, migrated, migrating) do, so "delete the old migration files" scores small instead of large. "migration(s)" counts toward the data area.
+
 ## [0.2.1] - 2026-11-20
 
 ### Changed

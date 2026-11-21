@@ -45,7 +45,7 @@ matches; if several match, the highest floor wins.
 |---|---|---|
 | change | 3 | fix, rename, bump, typo, update, add, implement, create, write, change, remove, make, move, delete, wire, configure, install |
 | research | 6 | research, compare, benchmark, evaluate, trade-off, market |
-| large build | 9 | build a …, port … into/to/from …, redesign, refactor, migrate, architect, overhaul, rewrite, re-implement, end-to-end, from scratch, a new system / service / app / plugin |
+| large build | 9 | build a …, port … into/to/from …, redesign, refactor, migrate (the verb; "migration" is not a trigger), architect, overhaul, rewrite, re-implement, end-to-end, from scratch, a new system / service / app / plugin |
 
 "build" is matched with care: "fix the build", "the build is slow" and "CI build failed" do
 not count as a large build.
@@ -89,6 +89,7 @@ These are the default policy's real scores (`bb gearshift explain` prints the sa
 | fix the typo in the README | change 3 | 3 | small |
 | rename getUser to fetchUser in api/users.ts | change 3 | 3 | small |
 | why is the build slow on CI? | question 1 + investigation 3 | 4 | small |
+| delete the old migration files | change 3 + risk 2 | 5 | small |
 | research which models are good for which tasks | research 6 | 6 | medium |
 | the login is flaky | no clear signal 3 + investigation 3 + risk 2 | 8 | medium |
 | port the billing service into a plugin | large build 9 | 9 | large |
@@ -105,7 +106,7 @@ gear each provider would use.
 | trivial | 0–2 | acknowledgements, quick questions |
 | small | 3–5 | one focused change |
 | medium | 6–8 | an investigation, research, or a change across a few places |
-| large | 9–11 | a multi-part feature or a migration |
+| large | 9–11 | a multi-part feature or migrating a system |
 | xlarge | 12–14 | a broad build across several layers |
 
 The bands must start at 0 and be contiguous. Move them to make Gearshift more or less

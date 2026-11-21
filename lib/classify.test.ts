@@ -14,6 +14,7 @@ describe("worked examples (docs/DESIGN.md)", () => {
     ["why is the dashboard slow?", 4, "small", "exact"],
     ["research which models are good for which tasks", 6, "medium", "exact"],
     ["the login is flaky", 8, "medium", "exact"],
+    ["delete the old migration files", 5, "small", "exact"],
     ["port the billing service into a plugin", 9, "large", "min"],
     ["build a plugin with a composer toggle, an analytics page and a settings editor, with tests and a PR", 12, "xlarge", "min"],
   ];
@@ -58,6 +59,26 @@ describe("contributions", () => {
   });
 });
 
+describe("the large-build class matches the verb migrate, not the noun migration", () => {
+  it("scores 'delete the old migration files' as change 3 + risk 2", () => {
+    const r = c("delete the old migration files");
+    expect(r.contributions.map((x) => [x.id, x.kind, x.value])).toEqual([["action", "floor", 3], ["risk", "add", 2]]);
+    expect(r).toMatchObject({ score: 5, tier: "small" });
+  });
+  it("still floors every verb form at large", () => {
+    for (const t of ["migrate the database to Postgres", "it migrates users", "we migrated everything", "migrating the users table"]) {
+      expect(c(t).contributions[0]).toMatchObject({ id: "large", kind: "floor", value: 9 });
+    }
+  });
+  it("leaves the noun to the data area, singular or plural", () => {
+    for (const t of ["write a migration for the new column", "review the migrations folder", "migration"]) {
+      expect(c(t).contributions.some((x) => x.id === "large")).toBe(false);
+    }
+    const r = c("add a migration and update the api handler");
+    expect(r.contributions.find((x) => x.id === "components")!.match).toBe("backend, data");
+  });
+});
+
 describe("special messages", () => {
   it("empty is trivial", () => {
     const r = c("   ");
@@ -70,6 +91,7 @@ describe("special messages", () => {
   it("continuation", () => {
     for (const t of ["continue", "go ahead", "Yes, please", "retry"]) expect(c(t).continuation).toBe(true);
     expect(c("continue the migration of every table").continuation).toBe(false);
+    expect(c("continue the migrations").continuation).toBe(false);
   });
   it("skip patterns match the raw text", () => {
     for (const t of ["<system-reminder>x</system-reminder>", "  <task-notification>", "[SYSTEM NOTIFICATION] hi", "BB plan-progress automatic reminder"]) {

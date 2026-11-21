@@ -359,7 +359,7 @@ export const DEFAULT_POLICY: Policy = {
         "patterns": [
           "(?<!\\b(?:the|fix|ci|nightly|a broken) )\\bbuild(?:ing)?\\b(?!\\s+(?:is|was|fails?|failed|failing|broke|broken|errors?|logs?|step|output|time)\\b)",
           "\\bport(?:ing)? (?:\\w+ ){0,3}(?:to|into|from)\\b",
-          "\\b(?:redesign|refactor\\w*|migrat\\w*|architect\\w*|overhaul|rewrite|re-?implement)\\b",
+          "\\b(?:redesign|refactor\\w*|migrat(?:e[sd]?|ing)|architect\\w*|overhaul|rewrite|re-?implement)\\b",
           "\\bend[- ]to[- ]end\\b",
           "\\bfrom scratch\\b",
           "\\b(?:new|design (?:a|the)) (?:system|service|app|plugin|platform)\\b"
@@ -382,7 +382,7 @@ export const DEFAULT_POLICY: Policy = {
       "groups": {
         "backend": "\\b(?:backend|endpoint|api|controller|server|service|handler)\\b",
         "frontend": "\\b(?:frontend|ui|ux|page|component|modal|button|css|react|vue|svelte)\\b",
-        "data": "\\b(?:database|schema|table|column|migration|query|sql)\\b",
+        "data": "\\b(?:database|schema|table|column|migrations?|query|sql)\\b",
         "auth": "\\b(?:permissions?|roles?|access control)\\b",
         "tests": "\\b(?:tests?|specs?|e2e|coverage)\\b",
         "infra": "\\b(?:deploy\\w*|ci|pipeline|docker|kubernetes|k8s|terraform|helm)\\b",
