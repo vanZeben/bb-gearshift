@@ -48,10 +48,19 @@ const kfmt = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` 
 export const formatBudget = kfmt;
 export const gearLabel = (g: Gear | null, fallback: string) => (g ? `${g.label}${g.effort ? ` · ${g.effort}` : ""}` : fallback);
 
+/** The tier's team plus the roles its message's signals add (deduplicated). Empty for a tier with no team. */
+export function teamRoles(policy: Policy, tier: Tier, contributionIds: readonly string[] = []): string[] {
+  const base = policy.teams[tier].roles;
+  if (base.length === 0) return [];
+  const out = [...base];
+  for (const id of contributionIds) for (const r of policy.signalRoles[id] ?? []) if (!out.includes(r)) out.push(r);
+  return out;
+}
+
 /** The single agent-only line appended to a medium-or-larger message. */
-export function formatRouteNote(a: { tier: Tier; score: number | null; policy: Policy; parentProviderId: string; catalogs: ReadonlyMap<string, CatalogModel[]> }): string {
+export function formatRouteNote(a: { tier: Tier; score: number | null; signalIds?: readonly string[]; policy: Policy; parentProviderId: string; catalogs: ReadonlyMap<string, CatalogModel[]> }): string {
   const team = a.policy.teams[a.tier];
-  const roles = team.roles.map((name) => {
+  const roles = teamRoles(a.policy, a.tier, a.signalIds).map((name) => {
     const r = resolveRole(a.policy, name, a.parentProviderId, a.tier, a.catalogs);
     if (!r) return null;
     const where = r.providerId === a.parentProviderId ? "" : ` on ${r.providerId}`;
