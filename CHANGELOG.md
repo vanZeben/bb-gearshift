@@ -10,6 +10,8 @@ All notable changes to Gearshift are recorded here. The format follows
 
 - The noun "migration" no longer triggers the large-build floor: only the verb forms (migrate, migrates, migrated, migrating) do, so "delete the old migration files" scores small instead of large. "migration(s)" counts toward the data area.
 - A short message that leads with a thank-you or approval and asks for nothing ("thanks for the help, that works") now scores trivial instead of small; messages that also match a signal class or a question, such as "ok, fix the login", are scored as before. New policy list `scoring.trivial.leading`.
+- The reason shown for a shift uses the same labels as the rest of the UI ("X-large task … → Opus 5.5 · XHigh", not "Xlarge task … · xhigh").
+- The Routing policy tabs no longer show a stray vertical scrollbar.
 
 ## [0.2.1] - 2026-11-20
 

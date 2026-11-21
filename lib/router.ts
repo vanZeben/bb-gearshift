@@ -1,6 +1,7 @@
 // Pure routing decision: first matching rule of docs/DESIGN.md wins. No I/O.
 import { classify, tierIndex, type Classification } from "./classify";
 import { clampEffort, gearWeight, resolveGear, resolveModel, type CatalogModel, type Gear } from "./gears";
+import { formatGear, formatTier } from "./labels";
 import { ladderFor, type CompiledPolicy, type Tier } from "./policy";
 
 export type Action = "shift" | "keep" | "hold" | "manual" | "skip" | "off";
@@ -27,8 +28,6 @@ export interface Decision {
   gear: Gear | null;
   needsAmend: boolean;
 }
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export function decide(input: DecideInput): Decision {
   const policy = input.policy.policy;
@@ -74,7 +73,7 @@ export function decide(input: DecideInput): Decision {
   const gear = resolveGear(ladder[c.tier], cat);
   if (!gear) return done("skip", `No model for ${c.tier} on ${input.providerId}`, null, c.tier);
   const signals = c.signals.length ? ` (${c.signals.join(", ")})` : "";
-  const why = `${cap(c.tier)} task${signals} → ${gear.label}${gear.effort ? ` · ${gear.effort}` : ""}`;
+  const why = `${formatTier(c.tier)} task${signals} → ${formatGear(gear.label, gear.effort)}`;
 
   if (cur && o.holdAboveTokens > 0 && input.contextTokens !== null && input.contextTokens >= o.holdAboveTokens) {
     const target = gearWeight(gear.model, gear.effort, ladder, cat);
