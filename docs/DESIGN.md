@@ -190,7 +190,7 @@ export interface Policy {
     holdAboveTokens: number;      // never downshift at or above this context size; 0 = never hold
   };
   scoring: {
-    trivial: { maxChars: number; patterns: string[] };      // score 0, high confidence
+    trivial: { maxChars: number; patterns: string[]; leading: string[] }; // score 0, high confidence; `leading` only when no class or question matches
     continuation: { maxChars: number; patterns: string[] }; // keep the thread's current gear
     question: { score: number; patterns: string[] };        // base score of a question when no floor class matched
     classes: ScoreClass[];
@@ -237,7 +237,13 @@ routes with `DEFAULT_POLICY`, and `getPolicy` reports the errors so the editor s
    removed; pasted blocks replaced by a size stub). `body` = whitespace-collapsed text.
 3. Empty body → score 0.
 4. `body.length ≤ continuation.maxChars` and a continuation pattern matches → `continuation: true`.
-5. `body.length ≤ trivial.maxChars` and a trivial pattern matches → score 0, confidence high.
+5. `body.length ≤ trivial.maxChars` and a `trivial.patterns` entry matches → score 0, confidence high.
+   Failing that, a `trivial.leading` entry (an acknowledgement that *leads* a short message:
+   "thanks for the help, that works") also scores 0, but only if no enabled scoring class and no
+   question pattern matches the body. The leading patterns only accept a thank-you or an
+   approval followed by a closing phrase, and carry a lookahead that rejects follow-up words
+   (now, also, but, and, please, "can you", question words…), so "ok, fix the login" and
+   "thanks, now rewrite it" are scored normally.
 6. Otherwise:
    - `floor` = the highest `floor` among matched enabled classes;
    - `base` = `floor` if any floor class matched, else `question.score` if a question pattern
@@ -312,6 +318,10 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
       "patterns": [
         "^(?:thanks|thank you|thx|ty|ok|okay|k|cool|nice|great|perfect|awesome|lgtm|sounds good|got it|yes|yep|yeah|no|nope|sure)\\b[.!\\s]*$",
         "^(?:👍|🙏|✅|👌|🎉)+\\s*$"
+      ],
+      "leading": [
+        "^(?:thanks|thank you|thx|ty|cheers)(?:[\\s,.!;:—–-]*$|[\\s,.!;:—–-]+(?:for|that|this|it|so|a|very|much|again|all|you)\\b)(?!.*\\b(?:now\\b(?![.!\\s]*$)|also|next|then|but|and|please|plz|pls|need|want|lets?|still|instead|another|more|actually|however|(?:can|could|would|will|should) (?:you|we|u)|how|what|when|where|which|who|why)\\b)",
+        "^(?:ok|okay|great|perfect|nice|cool|awesome|good|excellent)[\\s,.!;:—–-]+(?:that|this|it|thanks|thank you|thx|ty|looks|works?|worked|makes sense|got it)\\b(?!.*\\b(?:now\\b(?![.!\\s]*$)|also|next|then|but|and|please|plz|pls|need|want|lets?|still|instead|another|more|actually|however|(?:can|could|would|will|should) (?:you|we|u)|how|what|when|where|which|who|why)\\b)"
       ]
     },
     "continuation": {
@@ -383,6 +393,7 @@ Worked examples with the defaults (keep these as tests):
 | Message | Score | Tier |
 |---|---|---|
 | "thanks" | 0 | trivial |
+| "thanks for the help, that works" | 0 (leading acknowledgement, no work signal) | trivial |
 | "how does the queue work?" | 1 | trivial |
 | "fix the typo in the README" | 3 | small |
 | "fix the build" | 3 | small (not a large build) |
@@ -699,7 +710,7 @@ writes `thread_prefs` from it and deletes it.
   providers"; model select (the provider's models, "smallest / mid / largest model",
   "provider default", or a family word), effort and service-tier selects from the chosen
   model, and what it resolves to. Scoring: tier bands, signal classes (label, floor, add,
-  enabled, patterns list), component groups, question/trivial/continuation patterns,
+  enabled, patterns list), component groups, question/trivial (short reply and leading acknowledgement)/continuation patterns,
   bonuses. Try a message: `preview` with the draft overrides, per provider. Local draft
   until Save (sends `diffOverrides`), inline errors by path, changed markers, per-field
   revert, per-section reset and Reset all.

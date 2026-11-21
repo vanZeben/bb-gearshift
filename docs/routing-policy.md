@@ -58,7 +58,12 @@ When no floor class matches:
 
 Two shortcuts come first:
 
-- **Acknowledgements** ("thanks", "ok", "lgtm", 👍) of up to 60 characters score **0**.
+- **Acknowledgements** ("thanks", "ok", "lgtm", 👍) of up to 60 characters score **0**. So does a
+  short message that *starts* with a thank-you or an approval and only closes the conversation
+  ("thanks for the help, that works", "great, that works", "perfect, thanks"), provided nothing in it
+  matches a signal class or a question. Anything that asks for more stays scored normally: "ok, fix the
+  login", "great, now add tests", "thanks, now rewrite it" and "thanks, can you also delete the old
+  branch?" are not acknowledgements.
 - **Continuations** ("continue", "go ahead", "yes, do it") of up to 80 characters keep the
   thread's current gear.
 
@@ -85,6 +90,7 @@ These are the default policy's real scores (`bb gearshift explain` prints the sa
 | Message | How the score adds up | Score | Tier |
 |---|---|---|---|
 | thanks! | acknowledgement | 0 | trivial |
+| thanks for the help, that works | acknowledgement | 0 | trivial |
 | how does the queue work? | question 1 | 1 | trivial |
 | fix the typo in the README | change 3 | 3 | small |
 | rename getUser to fetchUser in api/users.ts | change 3 | 3 | small |

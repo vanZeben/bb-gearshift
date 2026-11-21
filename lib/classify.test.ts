@@ -8,6 +8,7 @@ const c = (t: string) => classify(t, cp);
 describe("worked examples (docs/DESIGN.md)", () => {
   const rows: Array<[string, number, string, "exact" | "min"]> = [
     ["thanks", 0, "trivial", "exact"],
+    ["thanks for the help, that works", 0, "trivial", "exact"],
     ["how does the queue work?", 1, "trivial", "exact"],
     ["fix the typo in the README", 3, "small", "exact"],
     ["fix the build", 3, "small", "exact"],
@@ -87,6 +88,40 @@ describe("special messages", () => {
   it("trivial acknowledgements", () => {
     for (const t of ["ok", "Thanks!", "lgtm", "👍", "yes"]) expect(c(t)).toMatchObject({ tier: "trivial", score: 0, confidence: "high" });
     expect(c("thanks, now rewrite the whole thing from scratch").tier).not.toBe("trivial");
+  });
+  it("an acknowledgement that leads a short message is trivial when nothing asks for work", () => {
+    for (const t of ["thanks for the help, that works", "thank you so much, that worked", "thanks, that fixed it", "thanks \u2014 that works", "great, that works", "perfect, thanks", "ok that makes sense", "ok, it works now", "nice, that looks good to me"]) {
+      expect(c(t), t).toMatchObject({ tier: "trivial", score: 0, confidence: "high" });
+    }
+    expect(c("thanks for the help, that works").contributions).toEqual([{ id: "trivial", label: "acknowledgement", kind: "base", value: 0, match: "thanks for" }]);
+  });
+  it("a leading acknowledgement does not make a request trivial", () => {
+    for (const t of [
+      "ok, fix the login", "great, now add tests", "thanks \u2014 can you also delete the old branch?",
+      "thanks, now rewrite the whole thing from scratch", "thanks for the help, that works, now add a test for the login",
+      "thanks, now the login page", "thanks, review the PR", "ok review the PR", "ok, look at the logs", "good morning, review this",
+      "great, can you explain how it works", "cheers, what next", "thank you for the help but it still crashes", "great idea, build a plugin for it",
+      "cool, show me the diff",
+    ]) expect(c(t).tier, t).not.toBe("trivial");
+  });
+  it("a question after a thank-you keeps the question score, not zero", () => {
+    expect(c("thanks for the help! how does the queue work?")).toMatchObject({ score: 1, tier: "trivial" });
+    expect(c("thanks for the help! how does the queue work?").contributions[0]!.id).toBe("question");
+  });
+  it("a leading acknowledgement is ignored beyond the short-reply length", () => {
+    expect(c(`thanks for the help, that works ${"really ".repeat(10)}well`).tier).not.toBe("trivial");
+  });
+  it("leading patterns stay fast on a long near-miss, even with a raised length cap", () => {
+    const long = compiledWith({ scoring: { trivial: { maxChars: 100_000 } } });
+    const t = performance.now();
+    classify(`thanks for ${"the help ".repeat(4_000)}`, long);
+    classify(`ok, that ${"works ".repeat(4_000)}`, long);
+    expect(performance.now() - t).toBeLessThan(50);
+  });
+  it("leading patterns come from the policy", () => {
+    const off = compiledWith({ scoring: { trivial: { leading: [] } } });
+    expect(classify("thanks for the help, that works", off).tier).toBe("small");
+    expect(classify("thanks", off).tier).toBe("trivial");
   });
   it("continuation", () => {
     for (const t of ["continue", "go ahead", "Yes, please", "retry"]) expect(c(t).continuation).toBe(true);

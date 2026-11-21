@@ -9,6 +9,7 @@ All notable changes to Gearshift are recorded here. The format follows
 ### Fixed
 
 - The noun "migration" no longer triggers the large-build floor: only the verb forms (migrate, migrates, migrated, migrating) do, so "delete the old migration files" scores small instead of large. "migration(s)" counts toward the data area.
+- A short message that leads with a thank-you or approval and asks for nothing ("thanks for the help, that works") now scores trivial instead of small; messages that also match a signal class or a question, such as "ok, fix the login", are scored as before. New policy list `scoring.trivial.leading`.
 
 ## [0.2.1] - 2026-11-20
 

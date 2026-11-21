@@ -58,7 +58,7 @@ export interface Policy {
   /** Scoring class id -> roles that join the tier's team when that class contributed to the score. */
   signalRoles: Record<string, string[]>;
   scoring: {
-    trivial: { maxChars: number; patterns: string[] };
+    trivial: { maxChars: number; patterns: string[]; leading: string[] };
     continuation: { maxChars: number; patterns: string[] };
     question: { score: number; patterns: string[] };
     classes: ScoreClass[];
@@ -97,7 +97,7 @@ export const policySchema: z.ZodType<Policy> = z.object({
   roles: z.record(z.string(), z.object({ gears: z.record(z.string(), roleGearSchema), budget: budgetSchema })),
   signalRoles: z.record(z.string(), z.array(z.string().min(1))),
   scoring: z.object({
-    trivial: z.object({ maxChars: nonNeg, patterns }),
+    trivial: z.object({ maxChars: nonNeg, patterns, leading: patterns }),
     continuation: z.object({ maxChars: nonNeg, patterns }),
     question: z.object({ score, patterns }),
     classes: z.array(z.object({ id: z.string().min(1), label: z.string(), patterns, floor: score.optional(), add: score.optional(), enabled: z.boolean().optional() })),
@@ -301,6 +301,10 @@ export const DEFAULT_POLICY: Policy = {
       "patterns": [
         "^(?:thanks|thank you|thx|ty|ok|okay|k|cool|nice|great|perfect|awesome|lgtm|sounds good|got it|yes|yep|yeah|no|nope|sure)\\b[.!\\s]*$",
         "^(?:👍|🙏|✅|👌|🎉)+\\s*$"
+      ],
+      "leading": [
+        "^(?:thanks|thank you|thx|ty|cheers)(?:[\\s,.!;:—–-]*$|[\\s,.!;:—–-]+(?:for|that|this|it|so|a|very|much|again|all|you)\\b)(?!.*\\b(?:now\\b(?![.!\\s]*$)|also|next|then|but|and|please|plz|pls|need|want|lets?|still|instead|another|more|actually|however|(?:can|could|would|will|should) (?:you|we|u)|how|what|when|where|which|who|why)\\b)",
+        "^(?:ok|okay|great|perfect|nice|cool|awesome|good|excellent)[\\s,.!;:—–-]+(?:that|this|it|thanks|thank you|thx|ty|looks|works?|worked|makes sense|got it)\\b(?!.*\\b(?:now\\b(?![.!\\s]*$)|also|next|then|but|and|please|plz|pls|need|want|lets?|still|instead|another|more|actually|however|(?:can|could|would|will|should) (?:you|we|u)|how|what|when|where|which|who|why)\\b)"
       ]
     },
     "continuation": {
@@ -565,6 +569,7 @@ export function validatePolicy(policy: unknown): PolicyError[] {
   const checkList = (list: string[], path: string) => list.forEach((src, i) => { const m = tryRegex(src); if (m) errors.push({ path: `${path}[${i}]`, message: m }); });
   checkList(p.skipPatterns, "skipPatterns");
   checkList(p.scoring.trivial.patterns, "scoring.trivial.patterns");
+  checkList(p.scoring.trivial.leading, "scoring.trivial.leading");
   checkList(p.scoring.continuation.patterns, "scoring.continuation.patterns");
   checkList(p.scoring.question.patterns, "scoring.question.patterns");
   for (const c of p.scoring.classes) checkList(c.patterns, `scoring.classes[${c.id}].patterns`);
@@ -602,7 +607,7 @@ export interface CompiledClass { id: string; label: string; floor?: number; add?
 export interface CompiledPolicy {
   policy: Policy;
   skip: RegExp[];
-  trivial: { maxChars: number; patterns: RegExp[] };
+  trivial: { maxChars: number; patterns: RegExp[]; leading: RegExp[] };
   continuation: { maxChars: number; patterns: RegExp[] };
   question: { score: number; patterns: RegExp[] };
   classes: CompiledClass[]; // enabled only
@@ -619,7 +624,7 @@ export function compilePolicy(policy: Policy): CompiledPolicy {
   return {
     policy,
     skip: policy.skipPatterns.map((p) => rx(p)),
-    trivial: { maxChars: s.trivial.maxChars, patterns: s.trivial.patterns.map((p) => rx(p)) },
+    trivial: { maxChars: s.trivial.maxChars, patterns: s.trivial.patterns.map((p) => rx(p)), leading: s.trivial.leading.map((p) => rx(p)) },
     continuation: { maxChars: s.continuation.maxChars, patterns: s.continuation.patterns.map((p) => rx(p)) },
     question: { score: s.question.score, patterns: s.question.patterns.map((p) => rx(p)) },
     classes: s.classes.filter((c) => c.enabled !== false).map((c) => ({ id: c.id, label: c.label, floor: c.floor, add: c.add, patterns: c.patterns.map((p) => rx(p)) })),

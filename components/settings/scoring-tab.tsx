@@ -252,6 +252,7 @@ export function ScoringTab() {
         <PatternsField label="Question patterns" path={["scoring", "question", "patterns"]} />
         <NumField label="Short reply: max characters" min={0} path={["scoring", "trivial", "maxChars"]} hint="Longer messages are never treated as a short reply." />
         <PatternsField label="Short reply patterns" path={["scoring", "trivial", "patterns"]} hint="Matches here score 0." />
+        <PatternsField label="Leading acknowledgement patterns" path={["scoring", "trivial", "leading"]} hint="A short message that matches one of these scores 0, but only when no class or question pattern matches it too." />
         <NumField label="Continuation: max characters" min={0} path={["scoring", "continuation", "maxChars"]} />
         <PatternsField label="Continuation patterns" path={["scoring", "continuation", "patterns"]} hint="Matches keep whatever gear the thread is already on." />
       </Section>
