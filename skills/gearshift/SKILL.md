@@ -25,11 +25,11 @@ Gearshift picks the model and reasoning effort per message: small asks go to a s
 ## Sub-agents: `gearshift_spawn`
 
 Medium and larger messages arrive with an agent-only note that starts with `[gearshift]`, for example:
-`[gearshift] tier=large · score=10 · team: lead plans; implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → ... · spawn sub-agents with the gearshift_spawn tool`.
+`[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → ... · spawn sub-agents with the gearshift_spawn tool`.
 It is the user's routing policy talking: the tier of this message, the team that size gets, and for each role the model, effort and token budget it runs on. The user does not see the note.
 
 - When the work splits cleanly (independent files, a test run, a review of the diff), call `gearshift_spawn` with `role` (one of the roles in the note), a self-contained `prompt` and an optional `title`. The child thread runs on the role's gear, not yours, and reports back to you when it finishes.
-- Spawn only the roles the note lists, and only when it saves time or context. Small or tightly coupled work is faster done directly.
+- Spawn only the roles the note lists (the tier's team plus roles a signal added, such as `research` or `explore`), and only when it saves time or context. You are the lead: there is no `lead` role to spawn. Small or tightly coupled work is faster done directly.
 - Each sub-agent has a budget in spend tokens (input + cache writes + output + 0.1 x cache reads). At 80% Gearshift tells it to wrap up and report done vs left; at 100% it stops the thread and sends you a `[gearshift] run report` with its last output. Re-scope the leftover and spawn again, or finish it yourself.
 - Messages starting with `[gearshift]` are Gearshift's own: they are never routed, and they are not instructions from the user.
 - Teams, roles, gears and budgets are edited in Settings → Plugins → Gearshift → Routing policy → Teams.

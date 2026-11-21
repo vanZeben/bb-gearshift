@@ -6,6 +6,14 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-20
+
+### Changed
+
+- Research and explore roles now join a team when the message shows a research or investigation signal (the `signalRoles` policy), so every default role is reachable.
+- Removed the `lead` role (the lead is the thread itself, on the tier's gear) and the `triage`, `digest` and `writing` roles from the defaults.
+- The Teams tab can add and remove roles and edit which signals add which roles.
+
 ## [0.2.0] - 2026-11-20
 
 ### Added
@@ -47,6 +55,7 @@ First release.
   and model mix, daily cost, model transitions and recent decisions.
 - `bb gearshift` command (`status`, `on`, `off`, `explain`, `policy`) and an agent skill.
 
-[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/vanZeben/bb-gearshift/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/vanZeben/bb-gearshift/releases/tag/v0.1.0

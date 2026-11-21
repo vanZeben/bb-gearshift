@@ -422,6 +422,8 @@ Policy schema (both are plain policy keys, merged like `gears`; roles replace pe
 
 **Host fallback** (`listModels`): the model catalog is host-scoped on some servers. With no environment or host, a plain `providers.models` call can fail ("Local host daemon is not initialized"), so the plugin then asks each host from `hosts.list()` in turn, connected ones first, and uses the first that lists models; it rethrows the first error only if none answers.
 
+**Signal roles (v0.2.1).** `policy.signalRoles: Record<scoringClassId, string[]>` (default `{ research: ["research"], investigation: ["explore"] }`) adds roles to any non-trivial team when the decision's contributions include that class. Validation rejects unknown class ids and unknown roles; maps merge and diff like other maps (`null` deletes). The decision stores its signal roles (`decisions.signal_roles`), and `gearshift_spawn` accepts a role only if it is in the tier's team or that decision's signal roles. The default roles are implement, research, explore, qa, verify, review and architecture; there is no `lead` role, because the lead is the thread itself on the tier's gear.
+
 ## Storage (`bb.storage.database()`, `lib/store.ts`)
 
 Append-only migrations (`bb.storage.migrate`). No message text is stored, only its

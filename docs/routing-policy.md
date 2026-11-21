@@ -159,7 +159,7 @@ Default teams:
 | trivial | answer directly, no sub-agents | none |
 | small | one implementer, run tests directly | implement |
 | medium | implementers on disjoint files + qa + verify | implement, qa, verify |
-| large | lead plans; implementers; qa; review of the diff | implement, qa, review |
+| large | implementers; qa; review of the diff | implement, qa, review |
 | xlarge | architecture plans first, then the large team | architecture, implement, qa, review |
 
 Default roles on Claude Code (other providers use the size classes `@small`, `@medium`, `@large`) and their budgets in thousands of tokens, trivial / small / medium / large / xlarge:
@@ -168,15 +168,20 @@ Default roles on Claude Code (other providers use the size classes `@small`, `@m
 | --- | --- | --- |
 | implement | sonnet · medium (high from medium up) | 80 / 160 / 360 / 700 / 1200 |
 | research | sonnet · medium | 80 / 150 / 250 / 300 / 350 |
-| digest | sonnet · medium | 40 / 60 / 100 / 150 / 150 |
 | explore | haiku · medium | 100 / 150 / 250 / 250 / 250 |
 | qa | haiku · low | 60 / 80 / 120 / 150 / 150 |
 | verify | haiku · medium | 60 / 80 / 120 / 150 / 150 |
-| triage | haiku · medium | 30 / 40 / 60 / 80 / 80 |
 | review | opus · medium | 100 / 150 / 250 / 300 / 300 |
-| lead | opus · medium | 100 / 200 / 300 / 400 / 500 |
 | architecture | fable · high | 450 / 450 / 450 / 500 / 550 |
-| writing | fable · low | 60 / 100 / 150 / 200 / 250 |
+
+**Signal roles.** Some roles join any non-trivial team when the message shows a matching signal, so the team fits the ask:
+
+| Signal | Adds |
+| --- | --- |
+| research ("research", "compare", "benchmark", "trade-offs") | research |
+| investigation ("flaky", "debug", "root cause", "why is…") | explore |
+
+The agent can only spawn roles listed in its note: the tier's team plus any signal roles. There is no `lead` role: the lead is the thread itself, and its model is the tier's gear (Gears tab). Add your own roles, or remove default ones, in the Teams tab.
 
 A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed.
 
