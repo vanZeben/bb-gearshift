@@ -221,6 +221,24 @@ describe("route note", () => {
     expect(s.update).toHaveBeenCalledTimes(1);
   });
 
+  const noteFor = async (text: string) => {
+    const s = await setup();
+    await s.hook(s.ctx(text));
+    const r = s.row("q1", text);
+    await s.queued(r); await s.flush();
+    return noteBlocks(s.queue.get("q1"))[0]?.text ?? "";
+  };
+  it("lists research for a research message and explore for an investigation message", async () => {
+    expect(await noteFor("compare redis and memcached trade-offs for our cache")).toMatch(/roles:.*research/);
+    expect(await noteFor(MEDIUM)).toMatch(/roles:.*explore/);
+  });
+  it("gives a trivial message no team and no signal roles", async () => {
+    const s = await setup();
+    await s.hook(s.ctx("ok thanks"));
+    expect(noteBlocks(s.queue.get("q1"))).toHaveLength(0);
+    expect(s.decisions().at(-1)!.signal_roles).toBe("[]");
+  });
+
   it("is not added to a small message", async () => {
     const s = await setup();
     await s.hook(s.ctx(SMALL));
@@ -270,13 +288,22 @@ describe("gearshift_spawn", () => {
   });
 
   it("supports a cross-provider role", async () => {
-    const s = await spawnSetup({ roles: { review: { gears: { "claude-code": { model: "gpt-6", effort: "medium", providerId: "codex" } } } } });
-    const res = await s.harness.behavior.callAgentTool("gearshift_spawn", { role: "review", prompt: "review the diff" }, { threadId: T } as never);
-    expect(JSON.stringify(res)).toMatch(/Spawned review/);
+    const s = await spawnSetup({ roles: { qa: { gears: { "claude-code": { model: "gpt-6", effort: "medium", providerId: "codex" } } } } });
+    const res = await s.harness.behavior.callAgentTool("gearshift_spawn", { role: "qa", prompt: "review the diff" }, { threadId: T } as never);
+    expect(JSON.stringify(res)).toMatch(/Spawned qa/);
     const a = s.spawn.mock.calls[0]![0] as Record<string, any>;
     expect(a).toMatchObject({ providerId: "codex", model: "gpt-6" });
     expect(a.executionInputSources.providerId).toBe("explicit");
     expect((s.db.prepare("SELECT provider FROM runs").get() as { provider: string }).provider).toBe("codex");
+  });
+
+  it("accepts a signal-added role and rejects an unlisted one", async () => {
+    const s = await spawnSetup(); // MEDIUM is an investigation: explore joins the team
+    const ok = await s.harness.behavior.callAgentTool("gearshift_spawn", { role: "explore", prompt: "look around" }, { threadId: T } as never);
+    expect(JSON.stringify(ok)).toMatch(/Spawned explore/);
+    const bad = await s.harness.behavior.callAgentTool("gearshift_spawn", { role: "architecture", prompt: "plan" }, { threadId: T } as never);
+    expect(JSON.stringify(bad)).toMatch(/not in this message's team/);
+    expect(s.spawn).toHaveBeenCalledTimes(1);
   });
 
   const insertRun = (db: any, parent: string, child: string, status = "running") =>

@@ -83,9 +83,33 @@ describe("validatePolicy", () => {
     const paths = validatePolicy(merge({ routing: { holdAboveTokens: -1 }, scoring: { classes: [{ id: "risk", add: 101 }] }, prices: { x: { input: -1, output: 1 } } })).map((e) => e.path);
     expect(paths).toEqual(expect.arrayContaining(["routing.holdAboveTokens", "scoring.classes[risk].add", "prices.x.input"]));
   });
+  it("rejects an unknown class id or role in signalRoles", () => {
+    const errs = validatePolicy(merge({ signalRoles: { nope: ["research"], research: ["ghost"] } }));
+    expect(errs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "signalRoles.nope", message: expect.stringMatching(/Unknown scoring class/) }),
+      expect.objectContaining({ path: "signalRoles.research", message: expect.stringMatching(/Unknown role "ghost"/) }),
+    ]));
+  });
   it("reports schema errors with a dotted path", () => {
     const errs = validatePolicy(merge({ routing: { defaultOn: "yes" } }));
     expect(errs[0]!.path).toBe("routing.defaultOn");
+  });
+});
+
+describe("roles and signalRoles", () => {
+  it("defaults drop lead/triage/digest/writing and map research and investigation signals", () => {
+    for (const r of ["lead", "triage", "digest", "writing"]) expect(DEFAULT_POLICY.roles[r]).toBeUndefined();
+    expect(DEFAULT_POLICY.signalRoles).toEqual({ research: ["research"], investigation: ["explore"] });
+  });
+  it("merges added and removed roles and replaces a signal's list", () => {
+    const x = merge({ roles: { scout: { gears: { "*": { model: "@small", effort: "low" } }, budget: { trivial: 1, small: 2, medium: 3, large: 4, xlarge: 5 } }, review: null }, signalRoles: { research: ["research", "scout"], investigation: null } });
+    expect(x.roles.scout).toBeDefined();
+    expect(x.roles.review).toBeUndefined();
+    expect(x.signalRoles).toEqual({ research: ["research", "scout"] });
+  });
+  it("diffs only the changed signalRoles", () => {
+    const x = merge({ signalRoles: { investigation: ["explore", "qa"] } });
+    expect(diffOverrides(DEFAULT_POLICY, x)).toEqual({ signalRoles: { investigation: ["explore", "qa"] } });
   });
 });
 
@@ -120,6 +144,8 @@ describe("diffOverrides", () => {
     classes: { scoring: { classes: [{ id: "risk", add: 4, label: "danger" }, { id: "large", enabled: false }, { id: "new", label: "n", patterns: ["z"], floor: 4 }] } },
     gears: { gears: { codex: { small: { model: "x", effort: "low", serviceTier: "fast" }, xlarge: null }, "claude-code": null, extra: { medium: { model: "@default" } } } },
     prices: { prices: { "claude-haiku-4-5": { input: 3, output: 4 }, "claude-opus-4": null, fresh: { input: 1, output: 1, cacheRead: 0.5 } }, serviceTierMultipliers: { fast: null, priority: 4 } },
+    roles: { roles: { scout: { gears: { "*": { model: "@small", effort: "low" } }, budget: { trivial: 1, small: 2, medium: 3, large: 4, xlarge: 5 } }, qa: null }, teams: { medium: { roles: ["implement", "scout"] } } },
+    signalRoles: { signalRoles: { research: ["research", "review"], investigation: null, risk: ["qa"] } },
     groups: { scoring: { components: { cap: 2, groups: { extra: "\\bfoo\\b" } } }, tiers: { trivial: { min: 0, max: 3 }, small: { min: 4, max: 5 } } },
   };
   for (const [name, o] of Object.entries(cases)) {
