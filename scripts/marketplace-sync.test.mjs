@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkScreenshot, chooseRange, derivePluginId, imageWidth, plan, rangeFor, write } from "./marketplace-sync.mjs";
+import { SCRIPT_REPO, checkScreenshot, chooseRange, derivePluginId, imageWidth, parseArgs, plan, rangeFor, write } from "./marketplace-sync.mjs";
 
 const png = (w) => {
   const b = Buffer.alloc(33);
@@ -144,5 +144,18 @@ describe("image checks", () => {
   it("rejects more than six screenshots", () => {
     const shots = Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((i) => [`${i}.png`, png(1600)]));
     expect(() => run(fixture({ shots }), "v0.1.0")).toThrow(/At most 6/);
+  });
+});
+
+describe("parseArgs", () => {
+  it("defaults --repo to the repository the script is in, not the current directory", () => {
+    expect(parseArgs([]).repo).toBe(SCRIPT_REPO);
+    expect(JSON.parse(readFileSync(join(SCRIPT_REPO, "package.json"), "utf8")).name).toBe("bb-plugin-gearshift");
+  });
+  it("takes --repo, --tag, --marketplace and --dry-run", () => {
+    expect(parseArgs(["--repo", "/x", "--tag", "v1.0.0", "--marketplace", "/m", "--dry-run"])).toEqual({ repo: "/x", tag: "v1.0.0", marketplace: "/m", dryRun: true });
+  });
+  it("rejects unknown arguments", () => {
+    expect(() => parseArgs(["--nope"])).toThrow(/Unknown argument/);
   });
 });

@@ -110,7 +110,7 @@ TAG=vX.Y.Z
 git clone --depth 1 --branch "$TAG" https://github.com/vanZeben/bb-gearshift.git gearshift
 (cd gearshift && npm ci --ignore-scripts)
 git clone https://github.com/get-bb/marketplace.git marketplace   # full history: the build reads entry dates from git
-node gearshift/scripts/marketplace-sync.mjs --tag "$TAG" --marketplace marketplace
+node gearshift/scripts/marketplace-sync.mjs --repo gearshift --tag "$TAG" --marketplace marketplace   # pass --repo: in tags up to v0.2.2 the script reads the current directory without it
 
 cd marketplace
 git checkout -b "gearshift-$TAG"
