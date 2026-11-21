@@ -69,6 +69,8 @@ lib/                      Pure logic and storage (most of the tests live here)
   policy.ts               Default policy, merge, validate, compile
   gears.ts                Gear spec → concrete model; effort clamping; size classes
   router.ts               The decision rules
+  team.ts                 Teams, roles, route note, budget guard rules
+  labels.ts               Display labels for tiers, efforts and gears
   store.ts                SQLite schema (append-only migrations) and queries
   analytics.ts            Decisions → analytics overview
   pricing.ts              List prices and cost estimates

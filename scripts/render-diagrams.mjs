@@ -245,8 +245,39 @@ function analytics() {
   return doc(W, H, "Analytics pipeline", "Each routing decision is recorded by the dispatch hook. When the thread goes idle, Gearshift reads the finished turn's token usage, prices it at list prices for the routed model and for the provider's top gear, and shows both on the analytics page.", body);
 }
 
+// 6. How it works: sub-agents (route note → spawn → budget guard → run report).
+
+function subagents() {
+  const W = 1280, H = 580, R1 = 130, R2 = 330, R3 = 490, bw = 230, bh = 74;
+  const n = {
+    send: { x: 150, y: R1, w: bw, h: bh, kind: "pill", label: "You send a medium\nor larger message" },
+    note: { x: 450, y: R1, w: bw, h: bh, label: "Route note appended\n(agent-only): team,\ngears, budgets" },
+    lead: { x: 750, y: R1, w: bw, h: bh, label: "Lead agent,\non the tier's gear" },
+    spawn: { x: 1050, y: R1, w: bw, h: bh, kind: "decision", label: "gearshift_spawn\nrole · prompt · title" },
+    kids: { x: 1050, y: R2, w: bw, h: 96, label: "Child threads, one per role\nimplement · qa · review\non the role's gear" },
+    guard: { x: 750, y: R2, w: bw, h: bh, kind: "decision", label: "Budget guard reads\nspend about every second" },
+    report: { x: 450, y: R2, w: bw, h: bh, kind: "accent", label: "At 100%: stop the child\nand report to the lead" },
+    nudge: { x: 750, y: R3, w: bw, h: bh, label: "At 80%: nudge once,\n\"report done vs left\"" },
+  };
+  const e = [
+    edge([side(n.send, "r"), side(n.note, "l")]),
+    edge([side(n.note, "r"), side(n.lead, "l")]),
+    edge([side(n.lead, "r"), side(n.spawn, "l")]),
+    edge([side(n.spawn, "b"), side(n.kids, "t")], { label: "child keeps its gear", at: [1062, 235], labelAnchor: "start" }),
+    edge([side(n.kids, "l"), side(n.guard, "r")], { label: "usage", at: [900, R2 - 10] }),
+    edge([side(n.guard, "l"), side(n.report, "r")], { label: "100%", at: [600, R2 - 10], accent: true }),
+    edge([side(n.guard, "b"), side(n.nudge, "t")], { label: "80%", at: [762, 420], labelAnchor: "start" }),
+    edge([side(n.report, "t"), [450, 230], [750, 230], side(n.lead, "b")], { label: "lead finishes or re-spawns", at: [600, 222] }),
+  ];
+  const body = [heading(48, 44, "Sub-agents"), ...e, ...Object.values(n).map(node),
+    `    <text x="1232" y="552" font-size="12" fill="${C.faint}" text-anchor="end">A child can run on another provider. A child that finishes under budget reports back on its own.</text>`].join("\n");
+  return doc(W, H, "How Gearshift orchestrates sub-agents",
+    "You send a medium or larger message. Gearshift appends an agent-only route note naming the team, each role's gear and its budget. The lead agent, on the tier's gear, starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread, which finishes the work or spawns again.",
+    body);
+}
+
 mkdirSync(OUT, { recursive: true });
-const files = { "routing.svg": routing(), "pipeline.svg": pipeline(), "architecture.svg": architecture(), "sequence.svg": sequence(), "analytics.svg": analytics() };
+const files = { "routing.svg": routing(), "pipeline.svg": pipeline(), "architecture.svg": architecture(), "sequence.svg": sequence(), "analytics.svg": analytics(), "subagents.svg": subagents() };
 for (const [name, svg] of Object.entries(files)) {
   writeFileSync(join(OUT, name), svg);
   console.log(`wrote docs/assets/diagrams/${name}`);

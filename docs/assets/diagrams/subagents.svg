@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="580" viewBox="0 0 1280 580" role="img" aria-labelledby="t d">
+  <title id="t">How Gearshift orchestrates sub-agents</title>
+  <desc id="d">You send a medium or larger message. Gearshift appends an agent-only route note naming the team, each role's gear and its budget. The lead agent, on the tier's gear, starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread, which finishes the work or spawns again.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b0f17"/><stop offset="1" stop-color="#171d29"/></linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#56606d"/></marker>
+    <marker id="arrowA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f5b041"/></marker>
+  </defs>
+  <rect width="1280" height="580" rx="20" fill="url(#bg)"/>
+  <g font-family="Inter, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="48" y="44" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">SUB-AGENTS</text>
+    <path d="M265 130 L335 130" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M565 130 L635 130" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M865 130 L935 130" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <path d="M1050 167 L1050 282" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="1062" y="235" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">child keeps its gear</text>
+    <path d="M935 330 L865 330" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="900" y="320" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">usage</text>
+    <path d="M635 330 L565 330" fill="none" stroke="#f5b041" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrowA)"/>
+    <text x="600" y="320" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">100%</text>
+    <path d="M750 367 L750 453" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="762" y="420" font-size="13" font-weight="600" fill="#8b949e" text-anchor="start">80%</text>
+    <path d="M450 293 L450 230 L750 230 L750 167" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
+    <text x="600" y="222" font-size="13" font-weight="600" fill="#8b949e" text-anchor="middle">lead finishes or re-spawns</text>
+    <rect x="35" y="93" width="230" height="74" rx="37" fill="#1c2330" stroke="#2f3846"/>
+    <text x="150" y="125.7" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">You send a medium</text>
+    <text x="150" y="145.2" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">or larger message</text>
+    <rect x="335" y="93" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="450" y="115.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Route note appended</text>
+    <text x="450" y="135.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">(agent-only): team,</text>
+    <text x="450" y="154.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">gears, budgets</text>
+    <rect x="635" y="93" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="750" y="125.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Lead agent,</text>
+    <text x="750" y="145.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">on the tier's gear</text>
+    <rect x="935" y="93" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="935" y="103" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="1050" y="125.7" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">gearshift_spawn</text>
+    <text x="1050" y="145.2" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">role · prompt · title</text>
+    <rect x="935" y="282" width="230" height="96" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="1050" y="315.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Child threads, one per role</text>
+    <text x="1050" y="335.4" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">implement · qa · review</text>
+    <text x="1050" y="354.9" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">on the role's gear</text>
+    <rect x="635" y="293" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <rect x="635" y="303" width="4" height="54" rx="2" fill="#f5b041"/>
+    <text x="750" y="325.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">Budget guard reads</text>
+    <text x="750" y="345.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">spend about every second</text>
+    <rect x="335" y="293" width="230" height="74" rx="37" fill="#f5b041" stroke="#f5b041"/>
+    <text x="450" y="325.6" font-size="15" font-weight="600" fill="#1a1205" text-anchor="middle">At 100%: stop the child</text>
+    <text x="450" y="345.1" font-size="15" font-weight="600" fill="#1a1205" text-anchor="middle">and report to the lead</text>
+    <rect x="635" y="453" width="230" height="74" rx="12" fill="#1c2330" stroke="#2f3846"/>
+    <text x="750" y="485.6" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">At 80%: nudge once,</text>
+    <text x="750" y="505.1" font-size="15" font-weight="400" fill="#e6edf3" text-anchor="middle">"report done vs left"</text>
+    <text x="1232" y="552" font-size="12" fill="#6e7681" text-anchor="end">A child can run on another provider. A child that finishes under budget reports back on its own.</text>
+  </g>
+</svg>

@@ -7,6 +7,7 @@ contracts between the pieces (RPC schemas, storage schema, decision rules) live 
 
 - [Architecture](#architecture)
 - [Shifting a message](#shifting-a-message)
+- [Sub-agents](#sub-agents)
 - [Fail-open guarantees](#fail-open-guarantees)
 - [Data and privacy](#data-and-privacy)
 - [Analytics](#analytics)
@@ -46,6 +47,77 @@ bb asks every plugin hook about each message before it reaches a provider
 - **Rows are amended by id.** For a grouped drain the row ids come from `ctx.queuedMessages`,
   and every row in the group is amended. A row whose text doesn't match the decision is
   never touched, whichever plugin owns its wait.
+
+## Sub-agents
+
+Gearshift also orchestrates. For a medium or larger message it tells the agent which sub-agents to start, starts them on the gear each role needs, and watches what they spend. For what this looks like to a user, see [Sub-agents in the README](../README.md#sub-agents); for the policy keys, see [Teams and sub-agents](routing-policy.md#teams-and-sub-agents).
+
+<p align="center"><img src="assets/diagrams/subagents.svg" width="100%" alt="How Gearshift orchestrates sub-agents. A medium or larger message gets an agent-only route note naming the team, each role's gear and its budget. The lead agent, on the tier's gear, starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread."></p>
+
+### The route note
+
+The same dispatch hook that picks the gear also decides whether to add a note. It adds one when all of these hold:
+
+- the **Add a team note** setting (`routeNotes`) is on;
+- it is the first attempt of a turn (`start-turn`), sent by a user or another agent;
+- the tier is medium, large or xlarge;
+- the decision is a shift, keep or hold. A model you picked by hand is never held just to add a note.
+
+The note is one line: the tier, the score, the team's summary, and each role with its resolved model, effort, provider (if not the lead's) and token budget. The roles are the tier's team plus the roles its signals add (`signalRoles`). A role on another provider is resolved against that provider's model list, so the hook may load more than one list.
+
+The note rides on the amend that carries a gear shift. It is added to the queued row as an `agent-only` text block that starts with `[gearshift]`, so bb's UI does not show it. When there is no gear change the amend is note-only and the hook still waits once ("Adding the team note"). A row that already has a note is never amended twice. Blocks that start with `[gearshift]` are stripped before scoring and fingerprinting, so a re-attempt never classifies Gearshift's own text.
+
+### What `gearshift_spawn` does
+
+The agent calls `gearshift_spawn` with a `role`, a `prompt` and an optional `title`. Step by step:
+
+1. **Checks.** Gearshift must be on for the thread. The caller must not itself be a sub-agent (no grandchildren). The parent may have at most 6 open sub-agents, and at most 20 are open overall.
+2. **Picks the tier.** It takes the tier of the parent's newest medium-or-larger decision, or medium if there is none.
+3. **Checks the role.** The role must exist, and it must be in that tier's team or in the signal roles stored with that decision. Otherwise the tool returns an error that lists the allowed roles.
+4. **Resolves the gear.** It reads the role's gear for the parent's provider (falling back to `"*"`), uses `effortMediumUp` from the medium tier up, and resolves the model against the target provider's list. A role with a provider override loads that provider's list. If nothing matches, the spawn fails.
+5. **Creates the thread.** It calls bb's `threads.spawn` with the parent as `parentThreadId`, the parent's environment reused, the role's provider, model, effort and service tier, and your prompt.
+6. **Records the run.** A row in the `runs` table holds the parent and child ids, role, tier, provider, model, effort and budget. The tool answers with the child's thread id, its gear and its budget.
+
+### How the gear is pinned
+
+The child is spawned with `executionInputSources` set to `explicit` for the provider, model, effort and service tier, so bb treats the gear as chosen. The dispatch hook then proceeds without deciding for any thread in `runs`. The child's first message can reach the hook before `spawn` returns and the run row exists, so Gearshift also lets through a child of a spawn that is in flight for up to a minute. `bb.agents.configure` withholds the `gearshift_spawn` tool from sub-agents and from threads where Gearshift is off.
+
+### The budget guard
+
+Only threads in `runs` are watched. The guard runs on thread events (bb batches these to about one a second), when a thread becomes active and when it goes idle.
+
+**Reading usage.** Spend is in tokens: input, plus cache writes, plus output, plus 0.1 of cache reads. The settled figure is the total from the child's latest token-usage event. That event does not move while a turn runs, so the guard adds an estimate: how much the child's context window has grown since that total was recorded.
+
+**Acting on it.**
+
+| Spend | What happens |
+|---|---|
+| under 80% | nothing |
+| 80% | once: the run becomes `nudged` and the child is steered with "Budget at 80%: finish the current step, then report done vs left." |
+| 100% | the run becomes `stopped` and is flagged over budget; the child thread is stopped; its last output is read |
+| turn ends first | the run becomes `done`. If the last turn crossed 100% it is flagged over budget but not stopped |
+
+A budget of 0 never triggers. A child that is given another turn after it is `done` is guarded again. Each change of status is claimed in SQL first (`UPDATE ... WHERE status IN (...)`) and acted on only by the caller whose update changed a row, so a nudge or a report goes out once even when two events arrive together.
+
+**The run report.** On a stop, Gearshift sends a message to the parent thread, queued behind its current turn and sent from the child. It starts with `[gearshift] run report`, names the role, child and the spend against the budget, and says the work is incomplete and the output may end mid-sentence. It ends with the child's last output, cut to 1,500 characters. The lead then finishes the work, spawns again with a smaller task, or raises the role's budget. Gearshift never routes its own report. A child that finishes under budget reports back to the lead on its own and gets no report from Gearshift.
+
+**Limits.** Enforcement follows bb's event cadence, so a fast child can overshoot by a second or so of work. A live test stopped a 30k-budget run at 41k. At budgets of 100k and up the overshoot is small next to the budget. The in-turn figure is an estimate and undercounts re-read context.
+
+### What is stored
+
+- The **`runs`** table, one row per sub-agent: ids, role, tier, provider, model, effort, budget, spend, status (`running`, `nudged`, `done`, `stopped` or `failed`), an over-budget flag, and start and end times. Open runs are kept; finished ones are deleted with the rest of the history after the retention window.
+- The signal roles of each **decision**, so a later spawn can be checked against the message that earned them.
+
+Prompts, outputs and report text are not stored. The analytics Sub-agents card reads `runs` and the token usage of the lead threads.
+
+### Fail-open and limits
+
+- If the note cannot be built within the hook's shared 1.5-second lookup budget, or building it throws, the message goes through without a note. A failed amend releases the row anyway.
+- A failed spawn returns an error to the agent as a tool result. Nothing is half-created: the run row is written only after the thread exists.
+- Every call the guard makes to bb is time-boxed (4 seconds), and a guard error is logged and dropped. It never blocks a message.
+- A sub-agent whose thread is archived, deleted or fails never reports, so its run is closed as `failed`. An open run older than 6 hours is failed as stale.
+- Limits: 6 open sub-agents per parent thread and 20 overall; no sub-agent spawns another.
+- Only `gearshift_spawn` sub-agents are covered. Claude Code's built-in Agent tool runs inside the lead's session and is not a bb thread, so Gearshift cannot see or route it.
 
 ## Fail-open guarantees
 
