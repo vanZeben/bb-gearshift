@@ -186,6 +186,12 @@ describe("regex safety", () => {
   it("rejects patterns over 500 characters", () => {
     expect(validatePolicy({ ...DEFAULT_POLICY, skipPatterns: ["a".repeat(501)] })[0]?.message).toMatch(/500/);
   });
+  it("accepts the default leading-acknowledgement patterns and checks overrides at their own path", () => {
+    expect(DEFAULT_POLICY.scoring.trivial.leading.length).toBeGreaterThan(0);
+    expect(validatePolicy(DEFAULT_POLICY)).toEqual([]);
+    const bad = { ...DEFAULT_POLICY, scoring: { ...DEFAULT_POLICY.scoring, trivial: { ...DEFAULT_POLICY.scoring.trivial, leading: ["(\\w+)+"] } } };
+    expect(validatePolicy(bad)[0]?.path).toBe("scoring.trivial.leading[0]");
+  });
   it("keeps ordinary groups", () => {
     expect(unsafeRegexReason("\\b(?:fix|add)s?\\b")).toBeNull();
     expect(unsafeRegexReason("(foo|bar)+")).toBeNull();

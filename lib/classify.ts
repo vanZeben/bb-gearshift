@@ -92,6 +92,11 @@ const first = (res: RegExp[], text: string): RegExpExecArray | null => {
   return null;
 };
 
+/** A scoring class or question pattern matches: the message asks for something. */
+function hasWorkSignal(body: string, cp: CompiledPolicy): boolean {
+  return cp.classes.some((c) => first(c.patterns, body) !== null) || first(cp.question.patterns, body) !== null;
+}
+
 export function classify(raw: string, cp: CompiledPolicy): Classification {
   const p = cp.policy;
   const base = { requestedFamily: null as string | null, continuation: false, skip: false };
@@ -119,7 +124,10 @@ export function classify(raw: string, cp: CompiledPolicy): Classification {
     if (m) return result(p.scoring.unmatchedScore, "low", [{ id: "continuation", label: "continuation", kind: "base", value: p.scoring.unmatchedScore, match: snip(m[0]) }], len, { ...ex, continuation: true });
   }
   if (len <= cp.trivial.maxChars) {
-    const m = first(cp.trivial.patterns, body);
+    // A bare acknowledgement is trivial outright. A short message that merely *leads* with one
+    // ("thanks for the help, that works") is trivial only when no class or question matches.
+    const m = first(cp.trivial.patterns, body)
+      ?? (cp.trivial.leading.length > 0 && !hasWorkSignal(body, cp) ? first(cp.trivial.leading, body) : null);
     if (m) return result(0, "high", [{ id: "trivial", label: "acknowledgement", kind: "base", value: 0, match: snip(m[0]) }], len, ex);
   }
 
