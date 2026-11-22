@@ -95,7 +95,7 @@ function routing() {
     asIs1: { x: 450, y: 92, w: 150, h: 40, kind: "pill", label: "Sent as is" },
     asIs2: { x: 750, y: 92, w: 150, h: 40, kind: "pill", label: "Sent as is" },
     model: { x: 1050, y: 92, w: 210, h: 40, kind: "pill", label: "Runs on that model" },
-    held: { x: 450, y: 572, w: 230, h: 40, kind: "pill", label: "Holds the current gear" },
+    held: { x: 450, y: 572, w: 230, h: 40, kind: "pill", label: "Keeps model, own effort" },
     sent3: { x: 150, y: 330, w: 150, h: 40, kind: "pill", label: "Sent as is" },
     shift: { x: 150, y: 572, w: 230, h: 44, kind: "accent", label: "Shifts, then sends" },
   };
@@ -117,7 +117,7 @@ function routing() {
   const body = [heading(48, 44, "How Gearshift routes a message"), ...e, ...Object.values(n).map(node),
     `    <text x="1232" y="612" font-size="12" fill="${C.faint}" text-anchor="end">A shift takes about a tenth of a second. Errors and timeouts send the message as is.</text>`].join("\n");
   return doc(W, H, "How Gearshift routes a message",
-    "You send a message. If Gearshift is off for the thread, it is sent as is. A steer, retry or system message is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise Gearshift scores the text from 0 to 14 with local rules, picks the tier's gear for the provider, holds the current gear if this would be a downshift on a long thread, sends as is if already on that gear, and otherwise shifts, then sends.",
+    "You send a message. If Gearshift is off for the thread, it is sent as is. A steer, retry or system message is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise Gearshift scores the text from 0 to 14 with local rules, picks the tier's gear for the provider, keeps the current model, at the message's own effort, if this would be a downshift on a long thread, sends as is if already on that gear, and otherwise shifts, then sends.",
     body);
 }
 
