@@ -1,5 +1,6 @@
 // Pure: decision rows -> a routing review the CLI prints and an agent reads ("bb gearshift review").
 // No message text exists in storage, so the report is numbers, signals and thread ids only.
+import { sizeClass, type SizeClass } from "./gears";
 import { formatEffort, formatTier } from "./labels";
 import { TIERS, ladderFor, type Policy, type Tier } from "./policy";
 import type { DecisionRow } from "./store";
@@ -23,10 +24,16 @@ export const HINT_SIGNAL_SHARE = 0.5;
 export const HINT_SIGNAL_SMALL_SHARE = 0.4;
 export const HINT_HOLD_COST_SHARE = 0.3;
 export const HINT_MANUAL_LOWER_SHARE = 0.6;
+export const HINT_LOWER_GEAR_SHARE = 0.3;
 /** Smallest sample a hint needs before it fires. */
 export const HINT_MIN_ROWS = 5;
 
 const EFFORT_RANK: Record<string, number> = { none: 0, minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+const CLASS_RANK: Record<SizeClass, number> = { small: 0, medium: 1, large: 2 };
+
+/** Why a lower gear would likely have fit a turn. */
+export type LowerGearReason = "small-output" | "held-above-tier" | "borderline";
+const LOWER_GEAR_REASONS: readonly LowerGearReason[] = ["small-output", "held-above-tier", "borderline"];
 
 export interface ReviewOptions {
   days: number; now?: number;
@@ -56,6 +63,11 @@ export interface ReviewTurn {
   /** Filled by withTitles at report time; titles are never stored. */
   threadTitle?: string;
 }
+export interface LowerGearTurn extends ReviewTurn {
+  reasons: LowerGearReason[];
+  /** The ladder gear to try: the next lower tier's (small-output, borderline) or the row's own tier's (held-above-tier). */
+  suggestedGear: string | null;
+}
 export interface HoldKindStats { kind: string; n: number; costUsd: number }
 export interface HoldOrigin {
   originId: number; threadId: string; at: string | null; gear: string | null; tier: Tier | null;
@@ -79,6 +91,12 @@ export interface Review {
   manualPicks: Array<{ tier: string; model: string; effort: string | null; n: number }>;
   overkill: ReviewTurn[];
   underkill: ReviewTurn[];
+  /** Routed turns with usage where a lower gear would likely have fit; each turn counted once, with every reason that matched. */
+  lowerGear: {
+    n: number; costUsd: number; shareOfCost: number;
+    byReason: Array<{ reason: LowerGearReason; n: number; costUsd: number }>;
+    turns: LowerGearTurn[];
+  };
   signalPrecision: SignalPrecision[];
   policy: {
     tiers: Record<Tier, { min: number; max: number }>; gears: Record<string, Record<string, string>>; holdAboveTokens: number;
@@ -108,6 +126,27 @@ function tally<K>(keys: Iterable<K>): Map<K, number> {
   const m = new Map<K, number>();
   for (const k of keys) m.set(k, (m.get(k) ?? 0) + 1);
   return m;
+}
+
+const specText = (g: { model: string; effort?: string }) => `${g.model}${g.effort ? ` · ${g.effort}` : ""}`;
+
+/**
+ * Did a held row run above the gear its own tier names? Review has no model catalog, so this is a name heuristic:
+ * the spec's model counts as the same model when it is a substring of the routed model id ("opus" in "claude-opus-5-5");
+ * then only a higher effort is "above". Otherwise both names get a size class (haiku/mini = small, opus/pro = large,
+ * else medium; "@small|@medium|@large" specs are classes already) and a bigger class is above. "@default" and rows
+ * without a routed model cannot be compared and never count.
+ */
+export function ranAboveGear(routedModel: string | null, routedEffort: string | null, spec: { model: string; effort?: string }): boolean {
+  if (!routedModel) return false;
+  const want = spec.model.trim().toLowerCase(), ran = routedModel.toLowerCase();
+  if (want === "" || want === "@default") return false;
+  const specClass: SizeClass | null = want === "@small" ? "small" : want === "@medium" ? "medium" : want === "@large" ? "large" : want.startsWith("@") ? null : sizeClass({ id: want, displayName: "" });
+  if (specClass === null) return false;
+  if (!want.startsWith("@") && ran.includes(want)) {
+    return spec.effort !== undefined && routedEffort !== null && (EFFORT_RANK[routedEffort] ?? 0) > (EFFORT_RANK[spec.effort] ?? 0);
+  }
+  return CLASS_RANK[sizeClass({ id: ran, displayName: "" })] > CLASS_RANK[specClass];
 }
 
 export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOptions): Review {
@@ -228,6 +267,37 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
   const overkill = routed.filter((r) => (r.tier === "large" || r.tier === "xlarge") && smallOut(r)).sort(newest).slice(0, LIST_LIMIT).map(toTurn);
   const underkill = routed.filter((r) => (r.tier === "trivial" || r.tier === "small") && r.output_tokens !== null && r.output_tokens > BIG_OUTPUT_TOKENS).sort(newest).slice(0, LIST_LIMIT).map(toTurn);
 
+  const lowerReasons = (r: DecisionRow): LowerGearReason[] => {
+    const tier = r.tier as Tier, i = (TIERS as readonly string[]).indexOf(tier);
+    const ladder = ladderFor(policy, r.provider_id);
+    const out: LowerGearReason[] = [];
+    if (i > 0 && smallOut(r)) out.push("small-output");
+    const holdKind = r.hold_kind ?? null;
+    if (r.action === "hold" && (holdKind === null || holdKind === "gear" || holdKind === "continuation")
+      && ranAboveGear(r.routed_model, r.routed_effort, ladder[tier])) out.push("held-above-tier");
+    // A row already moved down by the bias (scored_tier above tier) is not borderline any more.
+    const scored = (r as { scored_tier?: string | null }).scored_tier;
+    const biased = scored !== undefined && scored !== null && scored !== tier;
+    if (i > 0 && !biased && ((r.score !== null && r.score === policy.tiers[tier].min) || r.confidence === "low")) out.push("borderline");
+    return out;
+  };
+  const lowerRows = routed.filter((r) => r.output_tokens !== null).map((r) => ({ r, reasons: lowerReasons(r) })).filter((x) => x.reasons.length > 0);
+  const lowerCost = sum(lowerRows.map((x) => x.r.cost_usd ?? 0));
+  const suggestFor = (r: DecisionRow, reasons: LowerGearReason[]): string | null => {
+    const ladder = ladderFor(policy, r.provider_id);
+    const i = (TIERS as readonly string[]).indexOf(r.tier as string);
+    const spec = reasons.some((x) => x !== "held-above-tier") ? ladder[TIERS[i - 1]!] : ladder[r.tier as Tier];
+    return specText(spec);
+  };
+  const lowerGear: Review["lowerGear"] = {
+    n: lowerRows.length, costUsd: round(lowerCost, 4), shareOfCost: totalCost > 0 ? round(lowerCost / totalCost, 3) : 0,
+    byReason: LOWER_GEAR_REASONS.map((reason) => {
+      const m = lowerRows.filter((x) => x.reasons.includes(reason));
+      return { reason, n: m.length, costUsd: round(sum(m.map((x) => x.r.cost_usd ?? 0)), 4) };
+    }).filter((x) => x.n > 0).sort((a, b) => b.n - a.n || b.costUsd - a.costUsd || a.reason.localeCompare(b.reason)),
+    turns: lowerRows.map((x) => x).sort((a, b) => newest(a.r, b.r)).slice(0, LIST_LIMIT).map(({ r, reasons }) => ({ ...toTurn(r), reasons, suggestedGear: suggestFor(r, reasons) })),
+  };
+
   const largeRows = routed.filter((r) => r.tier === "large" || r.tier === "xlarge");
   const sigRows = new Map<string, DecisionRow[]>();
   for (const r of largeRows) for (const s of new Set(signalsOf(r))) sigRows.set(s, [...(sigRows.get(s) ?? []), r]);
@@ -245,7 +315,7 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
 
   const review: Review = {
     period: { days: opts.days, from: new Date(from).toISOString(), to: new Date(now).toISOString() },
-    counts, tiers, gears, holds, manualPicks, overkill, underkill, signalPrecision,
+    counts, tiers, gears, holds, manualPicks, overkill, underkill, lowerGear, signalPrecision,
     policy: {
       tiers: policy.tiers, gears: gearsByProvider, holdAboveTokens: policy.routing.holdAboveTokens,
       rev: opts.policyRev ?? null,
@@ -256,13 +326,13 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
     },
     hints: [],
   };
-  review.hints = buildHints(review, largeRows.length, manual, policy, { from, now, changedAt: opts.policyChangedAt ?? null });
+  review.hints = buildHints(review, largeRows.length, manual, policy, lowerRows.map((x) => x.r), { from, now, changedAt: opts.policyChangedAt ?? null });
   return review;
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: Policy, win: { from: number; now: number; changedAt: number | null }): ReviewHint[] {
+function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: Policy, lowerRows: DecisionRow[], win: { from: number; now: number; changedAt: number | null }): ReviewHint[] {
   const hints: ReviewHint[] = [];
   const x = rv.tiers.find((t) => t.tier === "xlarge");
   if (x && x.n >= HINT_MIN_ROWS && x.share > HINT_XLARGE_SHARE && (x.smallOutputShare ?? 0) > HINT_SMALL_OUTPUT_SHARE) {
@@ -290,6 +360,21 @@ function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: P
       evidence: { holds: rv.holds.n, costUsd: rv.holds.costUsd, shareOfCost: rv.holds.shareOfCost },
     });
   }
+  const lg = rv.lowerGear;
+  if (lg.n >= HINT_MIN_ROWS && lg.shareOfCost > HINT_LOWER_GEAR_SHARE) {
+    const top = lg.byReason[0]!.reason;
+    const tier = [...tally(lowerRows.map((r) => r.tier as Tier))].sort((a, b) => b[1] - a[1] || TIERS.indexOf(a[0]) - TIERS.indexOf(b[0]))[0]![0];
+    const lever = top === "small-output"
+      ? `lower the ${tier} gear's effort (gears.<provider>.${tier}.effort), or raise its band start (tiers.${tier}.min)`
+      : top === "held-above-tier"
+        ? "keep routing.holdEffortFollowsMessage on, so a held turn lowers its effort to the message's own tier"
+        : `keep routing.downshiftBias on, or raise the band start (tiers.${tier}.min) so edge scores land one tier down`;
+    hints.push({
+      id: "lower-gear",
+      message: `${lg.n} routed ${lg.n === 1 ? "message" : "messages"} (${pct(lg.shareOfCost)} of cost) would likely have fit a lower gear, mostly "${top}". Cheapest lever: ${lever}. Test it first: bb gearshift replay --set tiers.${tier}.min=${policy.tiers[tier].min + 1}.`,
+      evidence: { n: lg.n, costUsd: lg.costUsd, shareOfCost: lg.shareOfCost, topReason: top, tier },
+    });
+  }
   if (win.changedAt !== null && win.changedAt >= win.from && win.changedAt <= win.now) {
     hints.push({
       id: "policy-changed",
@@ -315,9 +400,9 @@ function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: P
   return hints;
 }
 
-/** Unique thread ids the report lists (overkill, underkill and hold origins), so the server can fetch their titles. */
+/** Unique thread ids the report lists (overkill, underkill, lower-gear turns and hold origins), so the server can fetch their titles. */
 export function reviewThreadIds(rv: Review): string[] {
-  return [...new Set([...rv.overkill, ...rv.underkill, ...rv.holds.topOrigins].map((t) => t.threadId))];
+  return [...new Set([...rv.overkill, ...rv.underkill, ...rv.lowerGear.turns, ...rv.holds.topOrigins].map((t) => t.threadId))];
 }
 
 /** Titles derive from message text and are never stored: the server fetches them at report time and adds them here. */
@@ -326,7 +411,7 @@ export function withTitles(rv: Review, titles: Record<string, string>): Review {
     const title = Object.prototype.hasOwnProperty.call(titles, x.threadId) ? titles[x.threadId] : undefined;
     return title ? { ...x, threadTitle: title } : x;
   };
-  return { ...rv, overkill: rv.overkill.map(tag), underkill: rv.underkill.map(tag), holds: { ...rv.holds, topOrigins: rv.holds.topOrigins.map(tag) } };
+  return { ...rv, overkill: rv.overkill.map(tag), underkill: rv.underkill.map(tag), lowerGear: { ...rv.lowerGear, turns: rv.lowerGear.turns.map(tag) }, holds: { ...rv.holds, topOrigins: rv.holds.topOrigins.map(tag) } };
 }
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
@@ -366,16 +451,26 @@ export function formatReview(rv: Review): string {
   if (!rv.manualPicks.length) L.push("- none");
   for (const m of rv.manualPicks) L.push(`- ${m.tier}: ${m.model}${m.effort ? ` · ${m.effort}` : ""} x${m.n}`);
 
+  const turnLine = (r: ReviewTurn) => {
+    const held = r.held ? `, held${r.holdKind ? ` (${r.holdKind})` : ""}${r.holdOriginId !== null ? ` from #${r.holdOriginId}` : ""}${r.inheritedGear ? ` on ${r.inheritedGear}` : ""}` : r.holdKind ? `, ${r.holdKind}` : "";
+    return `- #${r.id} ${r.at.slice(0, 16)}Z ${threadRef(r)} ${r.tier} score ${num(r.score)} [${r.signals.join(", ")}] on ${r.gear}${held}, output ${r.outputTokens}${r.costUsd !== null ? `, ${usd(r.costUsd)}` : ""}`;
+  };
   const turns = (title: string, list: ReviewTurn[]) => {
     L.push("", title);
     if (!list.length) L.push("- none");
-    for (const r of list) {
-      const held = r.held ? `, held${r.holdKind ? ` (${r.holdKind})` : ""}${r.holdOriginId !== null ? ` from #${r.holdOriginId}` : ""}${r.inheritedGear ? ` on ${r.inheritedGear}` : ""}` : r.holdKind ? `, ${r.holdKind}` : "";
-      L.push(`- #${r.id} ${r.at.slice(0, 16)}Z ${threadRef(r)} ${r.tier} score ${num(r.score)} [${r.signals.join(", ")}] on ${r.gear}${held}, output ${r.outputTokens}${r.costUsd !== null ? `, ${usd(r.costUsd)}` : ""}`);
-    }
+    for (const r of list) L.push(turnLine(r));
   };
   turns(`Possible overkill (large/x-large, output under ${SMALL_OUTPUT_TOKENS} tokens)`, rv.overkill);
   turns(`Possible underkill (trivial/small, output over ${BIG_OUTPUT_TOKENS} tokens)`, rv.underkill);
+
+  const lg = rv.lowerGear;
+  L.push("", "Lower gear would likely fit (routed messages with usage; each counted once)");
+  if (!lg.n) L.push("- none");
+  else {
+    L.push(`- ${lg.n} ${lg.n === 1 ? "message" : "messages"}, ${usd(lg.costUsd)} (${pct(lg.shareOfCost)} of cost)`);
+    L.push(`- reasons: ${lg.byReason.map((x) => `${x.reason} ${x.n} (${usd(x.costUsd)})`).join(", ")}`);
+    for (const r of lg.turns) L.push(`${turnLine(r)} → try ${r.suggestedGear ?? "?"} (${r.reasons.join(", ")})`);
+  }
 
   L.push("", "Signal precision (in large/x-large messages)");
   if (!rv.signalPrecision.length) L.push("- none");
