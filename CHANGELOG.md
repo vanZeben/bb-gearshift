@@ -11,10 +11,12 @@ All notable changes to Gearshift are recorded here. The format follows
 - **Every held message is evaluated on its own.** On a long thread Gearshift still keeps the model (a switch re-reads the context uncached), but the effort now follows the message's own tier when that is lower: a "thanks" on an Opus · XHigh thread runs on Opus · Low. A hold never raises the effort, and large and x-large messages never drop below medium. Claude Code sends effort per turn inside the conversation, so this keeps the prompt cache on current models. New setting **Lower the effort of held messages to their own size** (`holdEffortFollowsMessage`, on by default) turns it off.
 - A trivial or small message on a long thread moves to the cheaper model when one turn there costs less than holding, re-read included (for example Opus to Haiku up to 100k tokens of context).
 - Haiku 5.5's long-context rates (above 100k tokens) are priced in cost estimates.
+- **Borderline messages lean lower.** A message whose score is the bottom of its band, or that matched no signal, routes one tier lower (never up, at most one tier). New setting **Lean to the lower tier on borderline messages** (`downshiftBias`, on by default). A message with no signal now runs on the trivial gear.
 
 ### Added
 
 - `bb gearshift replay [--days N] [--set path=value]... [--json]` (also `review --replay`): re-runs your stored decisions under the current policy and hold rule, or under hypothetical edits, and prints before/after tier shares, holds and estimated cost, saying what is estimated.
+- The review flags turns where a lower gear would likely have fit (small output for the tier, held above the message's own tier, or a borderline score) with the gear to try, and the replay lists the turns that would run on a lower gear.
 - The review marks held overkill and underkill rows with the gear they inherited, lists hold kinds and the origin turns whose gear cost the most, notes when the policy last changed and how many decisions predate it, and shows thread titles next to ids.
 - `bb gearshift policy set` edits `scoring.length.<index>.overChars|add`, `scoring.files.pattern` and `explicitModel.enabled|pattern`; `add-pattern`/`remove-pattern` also take the trivial, continuation, question and skip pattern lists.
 
