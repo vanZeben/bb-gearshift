@@ -58,6 +58,8 @@ export interface Policy {
     defaultOn: boolean; respectManualPicks: boolean; routeAgentMessages: boolean; holdAboveTokens: number; routeNotes: boolean;
     /** Under a hold, keep the model but let the effort drop to the message's own tier (never raise it). */
     holdEffortFollowsMessage: boolean;
+    /** Route a borderline message (bottom of its band, or no clear signal) one tier lower; never higher. */
+    downshiftBias: boolean;
   };
   teams: Record<Tier, TeamSpec>;
   roles: Record<string, RoleSpec>;
@@ -99,7 +101,7 @@ export const policySchema: z.ZodType<Policy> = z.object({
   prices: z.record(z.string(), priceSchema),
   serviceTierMultipliers: z.record(z.string(), nonNeg),
   baselineModel: z.string().nullable(),
-  routing: z.object({ defaultOn: z.boolean(), respectManualPicks: z.boolean(), routeAgentMessages: z.boolean(), holdAboveTokens: nonNeg, routeNotes: z.boolean(), holdEffortFollowsMessage: z.boolean() }),
+  routing: z.object({ defaultOn: z.boolean(), respectManualPicks: z.boolean(), routeAgentMessages: z.boolean(), holdAboveTokens: nonNeg, routeNotes: z.boolean(), holdEffortFollowsMessage: z.boolean(), downshiftBias: z.boolean() }),
   teams: z.object({ trivial: teamSchema(), small: teamSchema(), medium: teamSchema(), large: teamSchema(), xlarge: teamSchema() }),
   roles: z.record(z.string(), z.object({ gears: z.record(z.string(), roleGearSchema), budget: budgetSchema })),
   signalRoles: z.record(z.string(), z.array(z.string().min(1))),
@@ -303,7 +305,8 @@ export const DEFAULT_POLICY: Policy = {
     "routeAgentMessages": true,
     "holdAboveTokens": 60000,
     "routeNotes": true,
-    "holdEffortFollowsMessage": true
+    "holdEffortFollowsMessage": true,
+    "downshiftBias": true
   },
   "teams": DEFAULT_TEAMS,
   "roles": DEFAULT_ROLES,

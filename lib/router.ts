@@ -1,8 +1,8 @@
 // Pure routing decision: first matching rule of docs/DESIGN.md wins. No I/O.
-import { classify, tierIndex, type Classification } from "./classify";
+import { classify, tierIndex, type Classification, type Confidence } from "./classify";
 import { clampEffort, effortRank, gearWeight, resolveGear, resolveModel, type CatalogModel, type Gear } from "./gears";
 import { formatEffort, formatGear, formatTier } from "./labels";
-import { ladderFor, type CompiledPolicy, type Policy, type Tier } from "./policy";
+import { TIERS, ladderFor, type CompiledPolicy, type Policy, type Tier } from "./policy";
 import { priceFor, ratesAt, tierMultiplier } from "./pricing";
 
 export type Action = "shift" | "keep" | "hold" | "manual" | "skip" | "off";
@@ -43,7 +43,10 @@ export interface Decision {
   action: Action;
   reason: string;
   classification: Classification;
+  /** The tier the message was routed as: the scored tier, or one lower when the downshift bias applied. */
   tier: Tier | null;
+  /** The tier the score alone gave, before the bias; equal to `tier` when nothing moved it. */
+  scoredTier: Tier | null;
   gear: Gear | null;
   needsAmend: boolean;
   holdKind: HoldKind | null;
@@ -52,6 +55,7 @@ export interface Decision {
 export function decide(input: DecideInput): Decision {
   const policy = input.policy.policy;
   const c = classify(input.text, input.policy);
+  let scored: Tier | null = null;
   const done = (action: Action, reason: string, gear: Gear | null = null, tier: Tier | null = null, holdKind: HoldKind | null = null): Decision => {
     let g = gear;
     if (g && g.effort === null) g = { ...g, effort: input.requested.effort };
@@ -59,7 +63,7 @@ export function decide(input: DecideInput): Decision {
     const same = !!g && g.model === input.requested.model && (g.effort ?? null) === (input.requested.effort ?? null)
       && (g.serviceTier ?? null) === (input.requested.serviceTier ?? null);
     const needsAmend = !!g && (action === "shift" || action === "hold") && !same;
-    return { action, reason, classification: c, tier, gear: g, needsAmend, holdKind };
+    return { action, reason, classification: c, tier, scoredTier: scored ?? tier, gear: g, needsAmend, holdKind };
   };
   const o = policy.routing;
   const cat = input.catalog;
@@ -89,12 +93,34 @@ export function decide(input: DecideInput): Decision {
     return done(same ? "keep" : "hold", `Continuing on ${gear.label}`, gear, c.tier, "continuation");
   }
 
-  const r = routeTier({ tier: c.tier, signals: c.signals, providerId: input.providerId, current: cur, contextTokens: input.contextTokens, catalog: cat, policy });
-  if (!r) return done("skip", `No model for ${c.tier} on ${input.providerId}`, null, c.tier);
-  if (r.action === "hold") return done("hold", r.reason, r.gear, c.tier, r.holdKind);
+  // Downshift bias: a borderline message runs one tier lower (the hold rule below then sees the lowered tier).
+  const b = biasTier(c.tier, c.score, c.confidence, policy);
+  scored = c.tier;
+  const tier = b.tier;
+  const r = routeTier({ tier, signals: c.signals, providerId: input.providerId, current: cur, contextTokens: input.contextTokens, catalog: cat, policy });
+  if (!r) return done("skip", `No model for ${tier} on ${input.providerId}`, null, tier);
+  if (b.biased) r.reason += ` (leaning lower: ${b.why})`;
+  if (r.action === "hold") return done("hold", r.reason, r.gear, tier, r.holdKind);
   const g2 = { ...r.gear, effort: r.gear.effort ?? input.requested.effort, serviceTier: r.gear.serviceTier ?? input.requested.serviceTier ?? null };
   const same = g2.model === input.requested.model && (g2.effort ?? null) === (input.requested.effort ?? null) && (g2.serviceTier ?? null) === (input.requested.serviceTier ?? null);
-  return done(same ? "keep" : "shift", r.reason, r.gear, c.tier, r.holdKind);
+  return done(same ? "keep" : "shift", r.reason, r.gear, tier, r.holdKind);
+}
+
+export interface BiasedTier { tier: Tier; biased: boolean; /** Why it leaned lower; empty when it did not. */ why: string }
+
+/**
+ * The downshift bias: with `routing.downshiftBias` on, a message that is not trivial runs one tier lower when
+ * its score is the lowest point of its band or the classifier found no clear signal (low confidence). At most
+ * one tier down, never up. Only the tier → gear path uses it (not explicit requests, manual picks, continuations).
+ */
+export function biasTier(tier: Tier, score: number | null, confidence: Confidence | string | null, policy: Policy): BiasedTier {
+  const same: BiasedTier = { tier, biased: false, why: "" };
+  const i = TIERS.indexOf(tier);
+  if (!policy.routing.downshiftBias || i <= 0) return same;
+  const lower = TIERS[i - 1]!;
+  if (score !== null && score === policy.tiers[tier].min) return { tier: lower, biased: true, why: `score ${score} is the bottom of ${tier}` };
+  if (confidence === "low") return { tier: lower, biased: true, why: "no clear signal" };
+  return same;
 }
 
 export interface RouteTierInput {

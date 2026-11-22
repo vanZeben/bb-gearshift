@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { decide, switchSaves, type DecideInput } from "./router";
+import { biasTier, decide, switchSaves, type DecideInput } from "./router";
+import { classify } from "./classify";
 import { CLAUDE_CATALOG, compiledDefault, compiledWith } from "./fixtures";
 
+// The existing rules are tested with the downshift bias off so each keeps testing what it names; the bias has its own block below.
+const NO_BIAS = { routing: { downshiftBias: false } };
+const unbiased = compiledWith(NO_BIAS);
 const base = (o: Partial<DecideInput> = {}): DecideInput => ({
   enabled: true, text: "fix the typo in the README", providerId: "claude-code", attempt: "start-turn", initiator: "user",
   requested: { model: "claude-opus-5-5", effort: "high" }, modelSource: null, current: null, contextTokens: null,
-  catalog: CLAUDE_CATALOG, policy: compiledDefault, ...o,
+  catalog: CLAUDE_CATALOG, policy: unbiased, ...o,
 });
 const BIG_BUILD = "build a plugin with a composer toggle, an analytics page and a settings editor, with tests and a PR";
 
@@ -113,7 +117,7 @@ describe("rule 10: hold above tokens", () => {
     expect(d.gear!.effort).toBe("low");
   });
   it("large and x-large never drop below medium effort under a hold", () => {
-    const p = compiledWith({ gears: { "claude-code": { large: { model: "opus", effort: "low" } } } });
+    const p = compiledWith({ ...NO_BIAS, gears: { "claude-code": { large: { model: "opus", effort: "low" } } } });
     const d = decide(base({ text: "redesign the plugin", current: opusXhigh, contextTokens: 355_000, requested: opusXhigh, policy: p }));
     expect(d).toMatchObject({ action: "hold", holdKind: "effort" });
     expect(d.gear!.effort).toBe("medium");
@@ -169,7 +173,7 @@ describe("switchSaves", () => {
 });
 
 describe("service tier", () => {
-  const fast = compiledWith({ gears: { "claude-code": { large: { model: "opus", effort: "high", serviceTier: "fast" } } } });
+  const fast = compiledWith({ ...NO_BIAS, gears: { "claude-code": { large: { model: "opus", effort: "high", serviceTier: "fast" } } } });
   it("is amended when the model lists it", () => {
     const d = decide(base({ text: "redesign the plugin", policy: fast, requested: { model: "claude-opus-5-5", effort: "high", serviceTier: "default" } }));
     expect(d).toMatchObject({ action: "shift", needsAmend: true });
@@ -178,5 +182,123 @@ describe("service tier", () => {
   it("keeps the composer's tier when the gear sets none", () => {
     const d = decide(base({ requested: { model: "claude-sonnet-5-5", effort: "medium", serviceTier: "fast" } }));
     expect(d).toMatchObject({ action: "keep", needsAmend: false });
+  });
+});
+
+describe("downshift bias", () => {
+  const pol = compiledDefault.policy;
+  const t = pol.tiers;
+  const opusHigh = { model: "claude-opus-5-5", effort: "high" };
+  const biased = compiledDefault; // the default policy has the bias on
+
+  it("is on by default", () => expect(pol.routing.downshiftBias).toBe(true));
+
+  describe("biasTier", () => {
+    it("moves the bottom point of a band one tier lower", () => {
+      expect(biasTier("large", t.large.min, "high", pol)).toMatchObject({ tier: "medium", biased: true });
+      expect(biasTier("small", t.small.min, "medium", pol)).toMatchObject({ tier: "trivial", biased: true });
+      expect(biasTier("xlarge", t.xlarge.min, "high", pol)).toMatchObject({ tier: "large", biased: true });
+    });
+    it("leaves the rest of the band alone", () => {
+      expect(biasTier("large", t.large.min + 1, "high", pol)).toMatchObject({ tier: "large", biased: false });
+      expect(biasTier("large", t.large.max, "high", pol)).toMatchObject({ tier: "large", biased: false });
+    });
+    it("moves a low-confidence message one tier lower wherever its score sits", () => {
+      expect(biasTier("large", t.large.min + 1, "low", pol)).toMatchObject({ tier: "medium", biased: true });
+      expect(biasTier("medium", t.medium.max, "low", pol)).toMatchObject({ tier: "small", biased: true });
+    });
+    it("never moves trivial", () => {
+      expect(biasTier("trivial", t.trivial.min, "low", pol)).toEqual({ tier: "trivial", biased: false, why: "" });
+    });
+    it("moves at most one tier even when both conditions apply", () => {
+      expect(biasTier("large", t.large.min, "low", pol).tier).toBe("medium");
+      expect(biasTier("xlarge", t.xlarge.min, "low", pol).tier).toBe("large");
+    });
+    it("does nothing with the setting off, and ignores an unknown confidence or a missing score", () => {
+      expect(biasTier("large", t.large.min, "low", compiledWith(NO_BIAS).policy)).toMatchObject({ tier: "large", biased: false });
+      expect(biasTier("large", null, null, pol).biased).toBe(false);
+      expect(biasTier("large", t.large.min + 1, "surprise", pol).biased).toBe(false);
+    });
+    it("explains why it leaned", () => {
+      expect(biasTier("large", t.large.min, "high", pol).why).toBe(`score ${t.large.min} is the bottom of large`);
+      expect(biasTier("large", t.large.min + 1, "low", pol).why).toBe("no clear signal");
+    });
+  });
+
+  // A message at the bottom of its band, and one with no clear signal mid-band (a long message with no scoring words).
+  const BAND_MIN = "redesign the plugin";
+  const NO_SIGNAL = "the weather today is nice and I was thinking about what we talked about yesterday regarding the thing ".repeat(12);
+  const bandMin = { text: BAND_MIN, c: classify(BAND_MIN, biased) };
+  const lowConf = { text: NO_SIGNAL, c: classify(NO_SIGNAL, biased) };
+
+  it("decide: a message at the bottom of its band runs one tier lower, and says so", () => {
+    const { text, c } = bandMin;
+    expect([c.tier, c.score, c.confidence]).toEqual(["large", t.large.min, "medium"]);
+    const d = decide(base({ text, policy: biased }));
+    expect(d.tier).toBe("medium");
+    expect(d.scoredTier).toBe(c.tier);
+    expect(d.reason).toContain(`(leaning lower: score ${c.score} is the bottom of ${c.tier})`);
+    const off = decide(base({ text }));
+    expect(off.tier).toBe(c.tier);
+    expect(off.scoredTier).toBe(c.tier);
+    expect(off.reason).not.toContain("leaning lower");
+  });
+
+  it("decide: a message with no clear signal runs one tier lower", () => {
+    const { text, c } = lowConf;
+    expect([c.tier, c.confidence]).toEqual(["small", "low"]);
+    expect(c.score).toBeGreaterThan(t.small.min);
+    const d = decide(base({ text, policy: biased }));
+    expect(d.scoredTier).toBe("small");
+    expect(d.tier).toBe("trivial");
+    expect(d.reason).toContain("(leaning lower: no clear signal)");
+    expect(decide(base({ text })).tier).toBe(c.tier);
+  });
+
+  it("decide: trivial stays trivial and a clear mid-band message is untouched", () => {
+    const d = decide(base({ text: "thanks", policy: biased }));
+    expect(d).toMatchObject({ tier: "trivial", scoredTier: "trivial" });
+    expect(d.reason).not.toContain("leaning lower");
+    const big = decide(base({ text: BIG_BUILD, policy: biased }));
+    expect(big.scoredTier).toBe(big.tier);
+  });
+
+  it("decide: explicit family requests, manual picks and continuations are not biased", () => {
+    const text = NO_SIGNAL;
+    const fam = decide(base({ text: `use opus for this: ${text}`, policy: biased }));
+    expect(fam.reason).toBe("You asked for Opus 5.5");
+    expect(fam.scoredTier).toBe(fam.tier);
+    const manual = decide(base({ text, policy: biased, modelSource: "explicit" }));
+    expect(manual.action).toBe("manual");
+    expect(manual.scoredTier).toBe(manual.tier);
+    const cont = decide(base({ text: "go ahead", current: opusHigh, policy: biased, requested: { model: "claude-sonnet-5-5", effort: "medium" } }));
+    expect(cont).toMatchObject({ action: "hold", holdKind: "continuation" });
+    expect(cont.scoredTier).toBe(cont.tier);
+    expect(cont.reason).not.toContain("leaning lower");
+  });
+
+  it("decide: the hold rule runs on the biased tier and never upshifts", () => {
+    const { text } = lowConf;
+    const h = decide(base({ text, policy: biased, current: opusHigh, requested: opusHigh, contextTokens: 120_000 }));
+    expect(h).toMatchObject({ action: "hold", tier: "trivial", scoredTier: "small" });
+    expect(h.gear).toMatchObject({ model: "claude-opus-5-5", effort: "low" }); // the trivial effort, not small's
+    expect(h.reason).toContain("(leaning lower: no clear signal)");
+    // A thread already below the biased tier's gear is not lifted by it.
+    const low = { model: "claude-haiku-5-5", effort: "low" };
+    const u = decide(base({ text: BAND_MIN, policy: biased, current: low, requested: low, contextTokens: 120_000 }));
+    expect(u.tier).toBe("medium");
+    expect(u.action).toBe("shift"); // the biased tier is still above what the thread runs: a hold never blocks an upshift
+    expect(u.gear!.model).toBe("claude-sonnet-5-5");
+  });
+
+  it("decide: the large effort floor applies to what stays large, not to a message the bias moved to medium", () => {
+    const xh = { model: "claude-opus-5-5", effort: "xhigh" };
+    const p = { gears: { "claude-code": { large: { model: "opus", effort: "low" }, medium: { model: "opus", effort: "low" } } } } as const;
+    const moved = decide(base({ text: BAND_MIN, policy: compiledWith(p), current: xh, requested: xh, contextTokens: 355_000 }));
+    expect(moved).toMatchObject({ action: "hold", tier: "medium", scoredTier: "large" });
+    expect(moved.gear!.effort).toBe("low");
+    const kept = decide(base({ text: BAND_MIN, policy: compiledWith({ ...p, ...NO_BIAS }), current: xh, requested: xh, contextTokens: 355_000 }));
+    expect(kept).toMatchObject({ action: "hold", tier: "large" });
+    expect(kept.gear!.effort).toBe("medium");
   });
 });

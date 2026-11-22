@@ -37,6 +37,8 @@ const samples = (effort: string, output: number, k = 5) => many(k, (i) => ({
 
 describe("re-banding", () => {
   const rows = many(3, (i) => ({ thread_id: `t${i}`, score: 4, tier: "small", cost_usd: 0.5, input_tokens: 10, output_tokens: 10 }));
+  // Score 5 stays inside medium (4-8) when small shrinks to 3-3: score 4 would be medium's bottom point and lean back down.
+  const mid = many(3, (i) => ({ thread_id: `t${i}`, score: 5, tier: "small", cost_usd: 0.5, input_tokens: 10, output_tokens: 10 }));
   it("is a no-op under the default policy for rows recorded under it", () => {
     const rp = replay(rows);
     expect(rp.rows).toBe(3);
@@ -45,7 +47,7 @@ describe("re-banding", () => {
     expect(rp.after.tiers).toEqual(rp.before.tiers);
   });
   it("re-tiers recorded scores under --set tiers.*", () => {
-    const rp = replay(rows, edit("tiers.small.max=3"));
+    const rp = replay(mid, edit("tiers.small.max=3"));
     expect(rp.before.tiers).toEqual([{ tier: "small", n: 3, share: 1 }]);
     expect(rp.after.tiers).toEqual([{ tier: "medium", n: 3, share: 1 }]);
     expect(rp.changes.tierMoves).toBe(3);
@@ -148,7 +150,7 @@ describe("continuation", () => {
 
 describe("what cannot be replayed", () => {
   it("counts a provider without a catalog as not replayed and keeps its cost", () => {
-    const rows = [r({ provider_id: "other", cost_usd: 0.5, input_tokens: 10, output_tokens: 10 }), r({ provider_id: "gone", cost_usd: 0.25 })];
+    const rows = [r({ provider_id: "other", score: 5, cost_usd: 0.5, input_tokens: 10, output_tokens: 10 }), r({ provider_id: "gone", score: 5, cost_usd: 0.25 })];
     const rp = replay(rows, edit("tiers.small.max=3"), { catalogs: { other: null, ...catalogs } });
     expect(rp.rows).toBe(2);
     expect(rp.replayed).toBe(0);
@@ -181,6 +183,13 @@ describe("applyReplaySets", () => {
     expect("policy" in res && res.policy.routing).toMatchObject({ holdAboveTokens: 30000, holdEffortFollowsMessage: false });
     const on = apply("routing.holdEffortFollowsMessage=yes");
     expect("policy" in on && on.policy.routing.holdEffortFollowsMessage).toBe(true);
+  });
+  it("sets routing.downshiftBias", () => {
+    const off = apply("routing.downshiftBias=false");
+    expect("policy" in off && off.policy.routing.downshiftBias).toBe(false);
+    const on = apply("routing.downshiftBias=false", "routing.downshiftBias=on");
+    expect("policy" in on && on.policy.routing.downshiftBias).toBe(true);
+    expect(apply("routing.downshiftBias=maybe")).toEqual({ error: expect.stringMatching(/routing\.downshiftBias takes true or false/) });
   });
   it("rejects bad values for them", () => {
     for (const v of ["", "-1", "1.5", "lots"]) expect(apply(`routing.holdAboveTokens=${v}`)).toEqual({ error: expect.stringMatching(/routing\.holdAboveTokens takes a whole number/) });
@@ -217,7 +226,7 @@ describe("parseReplaySet", () => {
 
 describe("formatReplay", () => {
   it("renders tier shares, the cost delta, hold counts and what is estimated", () => {
-    const rows = many(4, (i) => ({ thread_id: `t${i}`, cost_usd: 2, input_tokens: 1_000_000, output_tokens: 0 }));
+    const rows = many(4, (i) => ({ thread_id: `t${i}`, score: 5, cost_usd: 2, input_tokens: 1_000_000, output_tokens: 0 }));
     const text = formatReplay(replay(rows, edit("tiers.small.max=3"), { edits: ["tiers.small.max=3"] }));
     expect(text).toMatch(/Gearshift replay: last 30 days/);
     expect(text).toMatch(/Under the current policy with: tiers\.small\.max=3/);
@@ -238,5 +247,90 @@ describe("formatReplay", () => {
   });
   it("names the current rule when nothing is edited", () => {
     expect(formatReplay(replay([r()]))).toMatch(/Under the current policy \(and the current hold rule\)/);
+  });
+});
+
+describe("downshift bias", () => {
+  const T = DEFAULT_POLICY.tiers;
+  const off = (): Policy => edit("routing.downshiftBias=false");
+  /** A large message at the bottom of its band, recorded before the bias existed (tier = scored tier). */
+  const bottom = (o: Partial<DecisionRow> = {}) => r({ tier: "large", score: T.large.min, confidence: "high", routed_model: OPUS, routed_label: "Opus 5.5", routed_effort: "high", ...o });
+
+  it("moves a row at the bottom of its band one tier lower, from the recorded score", () => {
+    const rp = replay([bottom()]);
+    expect(rp.before.tiers).toEqual([{ tier: "large", n: 1, share: 1 }]);
+    expect(rp.after.tiers).toEqual([{ tier: "medium", n: 1, share: 1 }]);
+    expect(rp.changes.tierMoves).toBe(1);
+    expect(rp.after.gears[0]!.gear).toBe("Sonnet 5.5 · High");
+  });
+  it("moves a low-confidence row mid-band, and ignores a null or unknown confidence", () => {
+    const mid = T.large.min + 1;
+    expect(replay([bottom({ score: mid, confidence: "low" })]).after.tiers[0]!.tier).toBe("medium");
+    expect(replay([bottom({ score: mid, confidence: "high" })]).after.tiers[0]!.tier).toBe("large");
+    expect(replay([bottom({ score: mid, confidence: null })]).after.tiers[0]!.tier).toBe("large");
+    expect(replay([bottom({ score: mid, confidence: "weird" })]).after.tiers[0]!.tier).toBe("large");
+  });
+  it("moves at most one tier and never moves trivial", () => {
+    expect(replay([bottom({ confidence: "low" })]).after.tiers[0]!.tier).toBe("medium");
+    expect(replay([r({ tier: "trivial", score: 0, confidence: "low", routed_model: "claude-haiku-5-5", routed_label: "Haiku 5.5", routed_effort: "low" })]).after.tiers[0]!.tier).toBe("trivial");
+  });
+  it("does not bias twice: a row recorded with the bias already carries the lower tier", () => {
+    // Recorded after the change: tier is the biased one (medium), scored_tier the one the score gave (large).
+    const rp = replay([bottom({ tier: "medium", scored_tier: "large", routed_model: SONNET, routed_label: "Sonnet 5.5", routed_effort: "high" })]);
+    expect(rp.before.tiers).toEqual([{ tier: "medium", n: 1, share: 1 }]);
+    expect(rp.after.tiers).toEqual([{ tier: "medium", n: 1, share: 1 }]);
+    expect(rp.changes.tierMoves).toBe(0);
+    expect(rp.lowerGear.n).toBe(0);
+  });
+  it("--set routing.downshiftBias=false puts the row back on its scored tier", () => {
+    const rp = replay([bottom({ tier: "medium", scored_tier: "large", routed_model: SONNET, routed_label: "Sonnet 5.5", routed_effort: "high" })], off(), { edits: ["routing.downshiftBias=false"] });
+    expect(rp.after.tiers).toEqual([{ tier: "large", n: 1, share: 1 }]);
+    expect(rp.changes.tierMoves).toBe(1);
+    expect(rp.after.gears[0]!.gear).toBe("Opus 5.5 · High");
+    expect(rp.lowerGear.n).toBe(0);
+  });
+  it("replays the bias through a hold and never upshifts", () => {
+    const thread = { thread_id: "held", context_tokens: 100_000, current_model: OPUS, current_effort: "xhigh" };
+    const rp = replay([bottom({ ...thread, action: "hold", hold_kind: "gear", routed_effort: "xhigh" })]);
+    expect(rp.after.tiers[0]!.tier).toBe("medium");
+    expect(rp.after.gears.map((g) => g.gear)).toEqual(["Opus 5.5 · High"]); // medium's effort on the held model, down from xhigh
+  });
+
+  describe("lower gear", () => {
+    const priced = { input_tokens: 1_000_000, output_tokens: 0, cost_usd: 4 };
+    it("counts turns that run on a lower gear than they recorded, with cost and the top turns", () => {
+      const rows = [bottom({ thread_id: "a", ...priced }), bottom({ thread_id: "b", ...priced, cost_usd: 8, input_tokens: 2_000_000 }), r({ thread_id: "c", score: 4, cost_usd: 1, input_tokens: 10, output_tokens: 10 })];
+      const rp = replay(rows);
+      expect(rp.lowerGear.n).toBe(2);
+      expect(rp.lowerGear.costBefore).toBe(12);
+      expect(rp.lowerGear.costAfter).toBeLessThan(12);
+      expect(rp.lowerGear.top.map((t) => t.threadId)).toEqual(["b", "a"]); // biggest saving first
+      expect(rp.lowerGear.top[0]).toMatchObject({ tierBefore: "large", tierAfter: "medium", gearBefore: "Opus 5.5 · High", gearAfter: "Sonnet 5.5 · High", costBefore: 8 });
+      const text = formatReplay(rp);
+      expect(text).toMatch(/Lower gear: 2 turns run on a lower gear than they recorded, \$12\.00 → \$/);
+      expect(text).toMatch(/- #\d+ b: Large → Medium, Opus 5\.5 · High → Sonnet 5\.5 · High, \$8\.00 → \$/);
+    });
+    it("counts the same model on a lower effort", () => {
+      // Medium tier gear is Sonnet at the default effort; a recorded Sonnet xhigh turn drops to it.
+      const rp = replay([r({ tier: "medium", score: 7, routed_effort: "xhigh", cost_usd: 1, input_tokens: 10, output_tokens: 10 })]);
+      expect(rp.lowerGear.n).toBe(1);
+      expect(rp.lowerGear.top[0]).toMatchObject({ gearBefore: "Sonnet 5.5 · XHigh", gearAfter: "Sonnet 5.5 · High" });
+    });
+    it("does not count a higher or an unchanged gear, nor anything with the bias off", () => {
+      expect(replay([r()]).lowerGear.n).toBe(0);
+      expect(replay([r({ tier: "small", score: 4, routed_effort: "low" })]).lowerGear.n).toBe(0); // low → medium is higher
+      expect(replay([bottom()], off()).lowerGear.n).toBe(0);
+    });
+    it("lists at most ten turns but counts them all", () => {
+      const rp = replay(many(12, (i) => ({ ...bottom({ thread_id: `t${i}` }) })));
+      expect(rp.lowerGear.n).toBe(12);
+      expect(rp.lowerGear.top).toHaveLength(10);
+      expect(formatReplay(rp)).toMatch(/…and 2 more/);
+    });
+    it("says so when nothing runs lower, and notes how the bias is replayed", () => {
+      const text = formatReplay(replay([r()]));
+      expect(text).toMatch(/Lower gear: no turn runs on a lower gear/);
+      expect(text).toMatch(/downshift bias is replayed from that score and the stored confidence/);
+    });
   });
 });

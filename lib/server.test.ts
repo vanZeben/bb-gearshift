@@ -222,7 +222,7 @@ describe("route note", () => {
   });
 
   const noteFor = async (text: string) => {
-    const s = await setup();
+    const s = await setup({ settings: { downshiftBias: false } }); // the team follows the scored tier here
     await s.hook(s.ctx(text));
     const r = s.row("q1", text);
     await s.queued(r); await s.flush();
@@ -553,7 +553,7 @@ describe("CLI review and policy edits", () => {
 
   it("replay prints a before and after report, also through review --replay, and takes repeatable --set", async () => {
     const c = await cli();
-    for (let i = 0; i < 3; i++) insert(c, `thr-${i}`, "small", 4);
+    for (let i = 0; i < 3; i++) insert(c, `thr-${i}`, "small", 5); // 4 would be the bottom of medium and lean back down
     const rp = await c.run(["replay", "--days", "7", "--set", "tiers.small.max=3", "--set", "routing.holdAboveTokens=30000"], {});
     expect(rp.exitCode).toBe(0);
     expect(rp.stdout).toContain("Gearshift replay: last 7 days");
@@ -566,6 +566,21 @@ describe("CLI review and policy edits", () => {
     const json = JSON.parse((await c.run(["replay", "--json"], {})).stdout!) as { rows: number; period: { days: number }; edits: string[] };
     expect(json).toMatchObject({ rows: 3, period: { days: 30 }, edits: [] });
     expect((await c.getPolicy()).overrides).toEqual({}); // a replay never saves anything
+  });
+
+  it("replay takes --set routing.downshiftBias and reports turns that run on a lower gear", async () => {
+    const c = await cli();
+    insert(c, "thr-1", "large", 9); // the bottom of large: recorded before the bias existed
+    const on = await c.run(["replay", "--days", "7"], {});
+    expect(on.exitCode).toBe(0);
+    expect(on.stdout).toMatch(/- Large: 1 \(100%\) → 0 \(0%\)/);
+    expect(on.stdout).toMatch(/Lower gear: 1 turns run on a lower gear/);
+    const off = await c.run(["replay", "--days", "7", "--set", "routing.downshiftBias=false"], {});
+    expect(off.exitCode).toBe(0);
+    expect(off.stdout).toMatch(/- Large: 1 \(100%\) → 1 \(100%\)/);
+    expect(off.stdout).toMatch(/Opus 5\.5 · XHigh → Opus 5\.5 · High/); // large's own gear: still lower than the recorded xhigh, but the same model
+    expect(on.stdout).toMatch(/Opus 5\.5 · XHigh → Sonnet 5\.5 · High/);
+    expect((await c.run(["replay", "--set", "routing.downshiftBias=maybe"], {})).stderr).toMatch(/takes true or false/);
   });
 
   it("replay rejects a bad --set, a bad --days and --set without --replay", async () => {
@@ -601,10 +616,33 @@ describe("CLI review and policy edits", () => {
   });
 });
 
+describe("downshift bias", () => {
+  it("records the tier the score gave next to the routed tier, and follows the setting", async () => {
+    const on = await setup();
+    await on.hook(on.ctx(SMALL)); // score 3: the bottom of small
+    expect(on.decisions()[0]).toMatchObject({ action: "shift", tier: "trivial", scored_tier: "small", score: 3 });
+    expect(on.decisions()[0]!.reason).toContain("(leaning lower: score 3 is the bottom of small)");
+    const off = await setup({ settings: { downshiftBias: false } });
+    await off.hook(off.ctx(SMALL));
+    expect(off.decisions()[0]).toMatchObject({ tier: "small", scored_tier: "small" });
+    expect(off.decisions()[0]!.reason).not.toContain("leaning lower");
+  });
+  it("records the same tier twice when the message is not biased (a named model, a manual pick)", async () => {
+    const s = await setup();
+    await s.hook(s.ctx("use opus please"));
+    await s.hook(s.ctx(SMALL, { executionSources: { model: "explicit" } }));
+    const [named, manual] = s.decisions();
+    expect(named!.scored_tier).toBe(named!.tier);
+    expect(manual).toMatchObject({ action: "manual" });
+    expect(manual!.scored_tier).toBe(manual!.tier);
+  });
+});
+
 describe("held messages", () => {
   it("record the hold kind, the decision whose gear was inherited, the gear before and the policy stamp", async () => {
     let used = 1000;
     const s = await setup({
+      settings: { downshiftBias: false }, // this test follows the hold rule, not the bias
       defaults: async () => ({ model: "claude-opus-5-5", reasoningLevel: "xhigh", serviceTier: null }),
       threads: { events: { list: async () => [{ data: { contextWindowUsage: { usedTokens: used } } }] } },
     });
