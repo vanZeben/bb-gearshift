@@ -175,7 +175,8 @@ provider's xlarge gear. Models without a known price are counted in tokens only.
 messages per tier and action, output-token percentiles per tier, cost per gear, how much cost
 sits in held turns (by hold kind, and the origin turns whose gear the holds carried),
 hand-picked models, routed messages that look oversized or undersized for the work they
-produced (marked held or not, with the gear they inherited), how reliably each signal predicts
+produced (marked held or not, with the gear they inherited), the turns where a lower gear would
+likely have fit and which gear to try, how reliably each signal predicts
 large work, when the policy last changed and how many decisions predate it, and a few hints
 with their evidence numbers. It reads only stored metadata (lengths, signals, scores, token
 usage and thread ids). No message text exists in storage, so the report cannot contain any.
@@ -183,7 +184,8 @@ Thread titles are looked up from bb when the report runs and are not stored.
 
 `bb gearshift replay [--days N] [--set <path>=<value>]... [--json]` (or `review --replay`)
 re-runs the same decisions under the current policy and hold rule, or under hypothetical edits,
-and prints before/after tier shares, holds and estimated cost. Because messages aren't stored,
+and prints before/after tier shares, holds, estimated cost and the turns that would run on a
+lower gear. Because messages aren't stored,
 it can't re-score them: score bands, gears, efforts and the hold rule replay; scoring-rule
 changes don't. Costs reuse each turn's recorded usage on the new gear, and the report says
 which parts are estimated.

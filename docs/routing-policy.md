@@ -118,6 +118,22 @@ gear each provider would use.
 The bands must start at 0 and be contiguous. Move them to make Gearshift more or less
 willing to reach for the bigger gears.
 
+### Leaning lower on borderline messages
+
+With **Lean to the lower tier on borderline messages** on (`downshiftBias`, the default), a
+message routes one tier lower than its band when:
+
+- its score is the lowest point of its band (a 9 is the bottom of large, one point above
+  medium), or
+- no signal matched (low confidence), so the score is a guess.
+
+It moves at most one tier and never up; trivial stays trivial. A message with no signal scores
+3, the bottom of small, so it runs on the trivial gear. A model named in the message, a model
+you picked by hand, and a continuation are not affected, and the hold rule below runs on the
+lower tier. The score and the tier before the lean are recorded, so `bb gearshift review`
+and `bb gearshift replay --set routing.downshiftBias=false` show what it changed. Switch it
+off with `bb plugin config gearshift set downshiftBias false`.
+
 ## Gears
 
 A gear is a **model**, an **effort** and an optional **service tier**, set per provider and
@@ -221,6 +237,7 @@ Checked in this order; the first that applies decides.
 | 7 | The message names a model ("use opus", "with haiku") | runs on that model |
 | 8 | You picked a model by hand, with "A model picked by hand wins" on | keeps your pick |
 | 9 | A continuation ("go ahead") | keeps the thread's current gear |
+| 9b | A borderline score or no clear signal, with "Lean to the lower tier" on | uses the tier below (see [Leaning lower](#leaning-lower-on-borderline-messages)) |
 | 10 | The tier's gear would be a **downshift** and the thread's context is at least the hold threshold (60,000 tokens) | **holds** the current model; the effort follows the message (see below) |
 | 11 | Already on the tier's gear | sent as is |
 | 12 | Otherwise | **shifts** to the tier's gear |

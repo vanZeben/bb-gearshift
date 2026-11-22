@@ -83,6 +83,7 @@ Facts verified against bb 0.50.1 (SDK 0.6.157):
 | 6 | the text names a model family that resolves ("use opus") | `shift`/`keep` | You asked for {label} |
 | 7 | `modelSource === "explicit"` and `policy.routing.respectManualPicks` | `manual` | Model picked by hand |
 | 8 | continuation ("go ahead", "continue") and the thread has a current gear | `hold` (or `keep` if requested already equals it), hold kind `continuation` | Continuing on {label} |
+| 8b | `policy.routing.downshiftBias` on, the tier is above trivial, and the score is its band's `min` or the confidence is `low` | the routed tier is one lower (`biasTier`); `decisions.scored_tier` keeps the tier before it | … (leaning lower: …) |
 | 9 | the tier's gear does not resolve | `skip` | No model for {tier} on {provider} |
 | 10a | thread context ≥ `policy.routing.holdAboveTokens`, the tier's gear is *lower* than the current gear, the tier is trivial or small, and `switchSaves` (one turn on the new model, context written to its cache, costs less than staying, context read from cache; 2,000 output tokens each; list prices) | `shift`, hold kind `downshift` | {Tier} task … → {label}: cheaper than holding {held} even with the {N}k-token context re-read uncached |
 | 10b | as 10, `routing.holdEffortFollowsMessage` on, and the tier's effort (clamped to the current model; large/xlarge floored at medium) is lower than the current effort | `hold` on the current model at the tier's effort, hold kind `effort` | Holding {label}, effort {from} → {to} for a {tier} task: a {N}k-token context would be re-read uncached on another model |
@@ -134,6 +135,7 @@ knob is a form control.
 | `routeAgentMessages` | boolean | true | Route messages from other agents |
 | `holdAboveTokens` | number (int ≥ 0) | 60000 | Don't downshift threads above this many context tokens (0 = never hold) |
 | `holdEffortFollowsMessage` | boolean | true | Lower the effort of held messages to their own size |
+| `downshiftBias` | boolean | true | Lean to the lower tier on borderline messages |
 | `retentionDays` | number (int 1–3650) | 90 | Days of history kept |
 
 The effective policy's `routing` section is built from these settings at runtime.
@@ -196,6 +198,7 @@ export interface Policy {
     routeAgentMessages: boolean;  // route messages other agents send into a thread
     holdAboveTokens: number;      // never downshift at or above this context size; 0 = never hold
     holdEffortFollowsMessage: boolean; // under a hold, the effort drops to the message's tier (never rises)
+    downshiftBias: boolean;       // a band-bottom score or a low-confidence message routes one tier lower
   };
   scoring: {
     trivial: { maxChars: number; patterns: string[]; leading: string[] }; // score 0, high confidence; `leading` only when no class or question matches
@@ -319,7 +322,7 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
   },
   "serviceTierMultipliers": { "fast": 2 },
   "baselineModel": null,
-  "routing": { "defaultOn": true, "respectManualPicks": true, "routeAgentMessages": true, "holdAboveTokens": 60000, "holdEffortFollowsMessage": true },
+  "routing": { "defaultOn": true, "respectManualPicks": true, "routeAgentMessages": true, "holdAboveTokens": 60000, "holdEffortFollowsMessage": true, "downshiftBias": true },
   "scoring": {
     "trivial": {
       "maxChars": 60,
@@ -427,7 +430,9 @@ resolved model lists that tier in `supportedServiceTiers`.
 `buildReview(rows, policy, { days, now, policyRev, policyChangedAt })` summarizes stored decisions in the window: counts
 by action, per-tier share, score and output-token percentiles, cost per gear, the cost of
 holds by hold kind and the origin turns that cost the most, hand-picked models, overkill and
-underkill candidates (each marked held or not, with the inherited gear and origin), per-signal
+underkill candidates (each marked held or not, with the inherited gear and origin), turns where a
+lower gear would likely have fit (small output for the tier, held above the message's own tier,
+or a borderline score the bias would lower), per-signal
 precision, a policy-change note and hints with named thresholds. `formatReview` renders it as
 text. It reads only stored metadata; thread titles are fetched at report time
 (`reviewThreadIds`, `withTitles`) and never stored.
@@ -440,8 +445,9 @@ recorded score is re-banded under the replayed tiers, then `routeTier` picks the
 the hold rule applied against the replayed gear of the thread. Costs reuse each turn's token
 usage on the new gear; a replayed model switch prices cached context as cache writes; an
 effort change scales output by the window's own mean output per model and effort when both
-have five or more turns. `formatReplay` prints before/after tier shares, cost and holds, and
-lists what is estimated.
+have five or more turns. The downshift bias is re-applied from each row's score and stored
+confidence. `formatReplay` prints before/after tier shares, cost and holds, the turns that run
+on a lower gear after the replay, and lists what is estimated.
 `applyPolicyEdit(effective, defaults, edit)` applies one `set`, `unset`, `add-pattern` or
 `remove-pattern` edit to the effective policy, or returns an error; the CLI then diffs against
 the defaults and saves through the same validation as the `savePolicy` RPC. The analytics
@@ -513,6 +519,7 @@ ALTER TABLE decisions ADD COLUMN hold_origin_id INTEGER; -- hold rows: the decis
 ALTER TABLE decisions ADD COLUMN current_model TEXT;    -- the thread's gear before this message
 ALTER TABLE decisions ADD COLUMN current_effort TEXT;
 ALTER TABLE decisions ADD COLUMN policy_rev TEXT;       -- policyRev(effective policy): 8 hex chars
+ALTER TABLE decisions ADD COLUMN scored_tier TEXT;      -- the tier before the downshift bias (tier is the routed one)
 ```
 
 `hold_origin_id` is the newest routed or hand-picked start-turn decision of the thread, or that
