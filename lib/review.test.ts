@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReview, formatReview, reviewThreadIds, withTitles, type Review } from "./review";
+import { buildReview, formatReview, HINT_MIN_ROWS, reviewThreadIds, SMALL_OUTPUT_TOKENS, withTitles, type Review } from "./review";
 import { DEFAULT_POLICY } from "./policy";
 import type { DecisionRow } from "./store";
 
@@ -361,5 +361,157 @@ describe("thread titles", () => {
   it("ignores inherited property names as thread ids", () => {
     const odd = build([r({ tier: "large", output_tokens: 10, thread_id: "constructor" })]);
     expect(withTitles(odd, {}).overkill[0]!.threadTitle).toBeUndefined();
+  });
+});
+
+describe("lower gear", () => {
+  // Medium-tier rows by default: score 7 is mid-band, high confidence, big output, so nothing matches until a test sets it.
+  const base = (o: Partial<DecisionRow> = {}): DecisionRow => r({ tier: "medium", score: 7, confidence: "high", output_tokens: 5000, routed_model: "sonnet", routed_effort: "high", routed_label: "Sonnet", cost_usd: 1, ...o });
+  const lowerOf = (rows: DecisionRow[], policy = DEFAULT_POLICY) => buildReview(rows, policy, { days: 30, now: NOW }).lowerGear;
+
+  it("is empty when nothing matches", () => {
+    expect(lowerOf([base(), base({ tier: "trivial", score: 1, output_tokens: 10 })])).toEqual({ n: 0, costUsd: 0, shareOfCost: 0, byReason: [], turns: [] });
+    expect(formatReview(build([base()]))).toContain("Lower gear would likely fit");
+    expect(formatReview(build([base()]))).toMatch(/Lower gear would likely fit[^\n]*\n- none/);
+  });
+
+  describe("small-output", () => {
+    it("flags tiers above trivial with output under the small threshold and suggests the next lower gear", () => {
+      const lg = lowerOf([base({ tier: "large", score: 10, output_tokens: 100 }), base({ tier: "small", score: 4, output_tokens: SMALL_OUTPUT_TOKENS - 1 })]);
+      expect(lg.turns.map((t) => [t.tier, t.reasons, t.suggestedGear]).sort()).toEqual([
+        ["large", ["small-output"], "sonnet · high"],
+        ["small", ["small-output"], "haiku · low"],
+      ]);
+    });
+    it("skips trivial rows, rows at the threshold, rows without usage and unrouted rows", () => {
+      const lg = lowerOf([
+        base({ tier: "trivial", score: 1, output_tokens: 10 }), base({ output_tokens: SMALL_OUTPUT_TOKENS }), base({ output_tokens: null }),
+        base({ action: "manual", output_tokens: 10 }), base({ action: "skip", tier: null, output_tokens: 10 }),
+      ]);
+      expect(lg.n).toBe(0);
+    });
+  });
+
+  describe("held-above-tier", () => {
+    const held = (o: Partial<DecisionRow> = {}) => base({ action: "hold", tier: "small", score: 4, routed_model: "claude-opus-5-5", routed_effort: "xhigh", ...o });
+    it("flags a hold that ran on a bigger model than its own tier's gear and suggests that tier's gear", () => {
+      const t = lowerOf([held()]).turns[0]!;
+      expect(t).toMatchObject({ reasons: ["held-above-tier"], suggestedGear: "sonnet · medium", held: true });
+    });
+    it("on the same model, compares effort", () => {
+      expect(lowerOf([base({ action: "hold", routed_model: "claude-sonnet-5-5", routed_effort: "xhigh" })]).turns[0]!.reasons).toEqual(["held-above-tier"]);
+      expect(lowerOf([base({ action: "hold", routed_model: "claude-sonnet-5-5", routed_effort: "high" })]).n).toBe(0);
+      expect(lowerOf([base({ action: "hold", routed_model: "claude-sonnet-5-5", routed_effort: null })]).n).toBe(0);
+    });
+    it("ignores a hold on a smaller or equal class than its gear", () => {
+      expect(lowerOf([base({ action: "hold", tier: "large", score: 10, routed_model: "claude-sonnet-5-5", routed_effort: "high" })]).n).toBe(0);
+      expect(lowerOf([base({ action: "hold", tier: "large", score: 10, routed_model: "claude-haiku-5-5", routed_effort: "low" })]).n).toBe(0);
+    });
+    it("covers gear, continuation and unknown hold kinds, not effort holds or other actions", () => {
+      const n = (o: Partial<DecisionRow>) => lowerOf([held(o)]).n;
+      expect([n({ hold_kind: "gear" }), n({ hold_kind: "continuation" }), n({ hold_kind: null }), n({})]).toEqual([1, 1, 1, 1]);
+      expect(n({ hold_kind: "effort" })).toBe(0);
+      expect(n({ action: "keep" })).toBe(0);
+      expect(n({ routed_model: null })).toBe(0);
+    });
+    it("compares size classes for @-class specs and never counts @default", () => {
+      const withSmall = (spec: string): typeof DEFAULT_POLICY => ({ ...DEFAULT_POLICY, gears: { ...DEFAULT_POLICY.gears, "*": { ...DEFAULT_POLICY.gears["*"], small: { model: spec, effort: "medium" } } } });
+      const row = held({ provider_id: "other" });
+      expect(lowerOf([row], withSmall("@small")).turns[0]!.suggestedGear).toBe("@small · medium");
+      expect(lowerOf([row], withSmall("@large")).n).toBe(0);
+      expect(lowerOf([row], withSmall("@default")).n).toBe(0);
+    });
+  });
+
+  describe("borderline", () => {
+    it("flags a score at the bottom of its band and suggests the next lower tier's gear", () => {
+      const t = lowerOf([base({ score: DEFAULT_POLICY.tiers.medium.min })]).turns[0]!;
+      expect(t).toMatchObject({ reasons: ["borderline"], suggestedGear: "sonnet · medium" });
+      expect(lowerOf([base({ score: DEFAULT_POLICY.tiers.medium.min + 1 })]).n).toBe(0);
+    });
+    it("flags low confidence at any score", () => {
+      expect(lowerOf([base({ confidence: "low" })]).turns[0]!.reasons).toEqual(["borderline"]);
+    });
+    it("cannot move the lowest tier lower", () => {
+      expect(lowerOf([base({ tier: "trivial", score: 0, confidence: "low" })]).n).toBe(0);
+    });
+    it("leaves a row the bias already moved down, but still flags one whose scored tier matches", () => {
+      const biased = base({ score: 6 }) as DecisionRow & { scored_tier?: string | null };
+      biased.scored_tier = "large";
+      expect(lowerOf([biased]).n).toBe(0);
+      const same = base({ score: 6 }) as DecisionRow & { scored_tier?: string | null };
+      same.scored_tier = "medium";
+      expect(lowerOf([same]).n).toBe(1);
+      const unset = base({ score: 6 }) as DecisionRow & { scored_tier?: string | null };
+      unset.scored_tier = null;
+      expect(lowerOf([unset]).n).toBe(1);
+    });
+  });
+
+  describe("counting", () => {
+    const all = () => base({ action: "hold", score: 6, confidence: "low", output_tokens: 100, routed_model: "claude-opus-5-5", routed_effort: "xhigh", cost_usd: 3 });
+    it("counts a row once and lists every reason, preferring the lower tier's gear", () => {
+      const lg = lowerOf([all(), base({ score: 6, cost_usd: 1 })]);
+      expect(lg.n).toBe(2);
+      expect(lg.costUsd).toBe(4);
+      expect(lg.turns.find((t) => t.costUsd === 3)).toMatchObject({ reasons: ["small-output", "held-above-tier", "borderline"], suggestedGear: "sonnet · medium" });
+      expect(lg.byReason).toEqual([
+        { reason: "borderline", n: 2, costUsd: 4 }, { reason: "held-above-tier", n: 1, costUsd: 3 }, { reason: "small-output", n: 1, costUsd: 3 },
+      ]);
+    });
+    it("reports the cost share of all routed cost", () => {
+      const lg = lowerOf([base({ score: 6, cost_usd: 2 }), base({ cost_usd: 3 }), base({ cost_usd: 3 }), base({ action: "manual", cost_usd: 100 })]);
+      expect(lg.shareOfCost).toBe(0.25);
+      expect(lowerOf([base({ score: 6 })]).shareOfCost).toBe(1);
+      expect(lowerOf([base({ score: 6, cost_usd: null })]).shareOfCost).toBe(0);
+    });
+    it("lists the newest first and caps the list while counting all", () => {
+      const rows = Array.from({ length: 20 }, (_, i) => base({ id: 1000 + i, at: NOW - (20 - i) * 1000, score: 6 }));
+      const lg = lowerOf(rows);
+      expect(lg.n).toBe(20);
+      expect(lg.turns).toHaveLength(15);
+      expect(lg.turns[0]!.id).toBe(1019);
+    });
+  });
+
+  describe("hint", () => {
+    const hintOf = (rows: DecisionRow[]) => build(rows).hints.find((h) => h.id === "lower-gear");
+    const pad = (k: number, cost: number) => many(k, { tier: "medium", score: 7, confidence: "high", output_tokens: 5000, cost_usd: cost });
+    it("fires with enough rows and a cost share above 30%", () => {
+      const rows = [...many(HINT_MIN_ROWS, { tier: "large", score: 10, output_tokens: 100, cost_usd: 2 }), ...pad(3, 2)];
+      const h = hintOf(rows)!;
+      expect(h.evidence).toMatchObject({ n: HINT_MIN_ROWS, shareOfCost: 0.625, topReason: "small-output", tier: "large" });
+      expect(h.message).toMatch(/gears\.<provider>\.large\.effort/);
+      expect(h.message).toContain("bb gearshift replay --set tiers.large.min=10");
+    });
+    it("stays quiet under the row minimum or at 30% of cost", () => {
+      expect(hintOf([...many(HINT_MIN_ROWS - 1, { tier: "large", score: 10, output_tokens: 100, cost_usd: 5 }), ...pad(1, 1)])).toBeUndefined();
+      expect(hintOf([...many(HINT_MIN_ROWS, { tier: "large", score: 10, output_tokens: 100, cost_usd: 3 }), ...pad(35, 1)])).toBeUndefined();
+    });
+    it("points at the lever for the top reason", () => {
+      const heldRows = many(HINT_MIN_ROWS, { action: "hold", tier: "small", score: 4, output_tokens: 5000, routed_model: "claude-opus-5-5", routed_effort: "xhigh", cost_usd: 2 });
+      expect(hintOf(heldRows)!.message).toMatch(/holdEffortFollowsMessage/);
+      const edge = many(HINT_MIN_ROWS, { tier: "medium", score: 6, output_tokens: 5000, cost_usd: 2 });
+      expect(hintOf(edge)!.message).toMatch(/downshiftBias.*tiers\.medium\.min.*replay --set tiers\.medium\.min=7/);
+    });
+  });
+
+  describe("titles and format", () => {
+    const rows = [base({ id: 1, thread_id: "tl", score: 6, cost_usd: 2 }), base({ id: 2, thread_id: "tm", action: "hold", tier: "small", score: 4, routed_model: "claude-opus-5-5", routed_effort: "xhigh", cost_usd: 1 })];
+    const rv = build(rows);
+    it("lists lower-gear threads for title lookup and tags them", () => {
+      expect(reviewThreadIds(rv).sort()).toEqual(["tl", "tm"]);
+      const out = withTitles(rv, { tl: "Edge case", tm: "Held on big" });
+      expect(out.lowerGear.turns.map((t) => t.threadTitle).sort()).toEqual(["Edge case", "Held on big"]);
+      expect(rv.lowerGear.turns.every((t) => t.threadTitle === undefined)).toBe(true);
+    });
+    it("prints the summary, reasons and turns with the suggestion after the overkill and underkill lists", () => {
+      const text = formatReview(withTitles(rv, { tl: "Edge case" }));
+      expect(text.indexOf("Lower gear would likely fit")).toBeGreaterThan(text.indexOf("Possible underkill"));
+      expect(text).toContain("- 2 messages, $3.00 (100% of cost)");
+      expect(text).toContain("- reasons: borderline 1 ($2.00), held-above-tier 1 ($1.00)");
+      expect(text).toMatch(/- #1 .* thread tl "Edge case" medium score 6 .* on Sonnet · High, output 5000, \$2\.00 → try sonnet · medium \(borderline\)/);
+      expect(text).toMatch(/- #2 .* held, .* → try sonnet · medium \(held-above-tier\)/);
+    });
   });
 });
