@@ -73,6 +73,8 @@ lib/                      Pure logic and storage (most of the tests live here)
   labels.ts               Display labels for tiers, efforts and gears
   store.ts                SQLite schema (append-only migrations) and queries
   analytics.ts            Decisions → analytics overview
+  review.ts               Decisions → routing review report (`bb gearshift review`)
+  policy-edit.ts          One-value policy edits (`bb gearshift policy set|unset|…`)
   pricing.ts              List prices and cost estimates
   contract.ts             RPC schemas (the app imports types only)
   channels.ts             Runtime constants shared with the app (no SDK imports)

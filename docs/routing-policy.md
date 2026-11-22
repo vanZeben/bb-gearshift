@@ -241,6 +241,18 @@ holding off.
 All of these are edits in the Routing policy editor. **Try a message** shows the effect
 before you save, and every changed field has a revert button.
 
+**Let an agent tune it.** Open the analytics page and click **Improve my rules**. It opens a
+new-thread draft (you choose the project, provider and model, then send it) that asks the agent
+to run `bb gearshift review --days N`. The report lists, from stored metadata only, how
+messages split across tiers, how much cost sits in held turns, which large and x-large
+messages produced little output (possible overkill), which small ones produced a lot (possible
+underkill), how often each signal fires on small work, and where you overrode the choice by
+hand. The agent proposes a numbered list of changes with evidence. With your OK it may open a
+few of the listed threads to judge whether the gear really fit. It applies only the changes
+you approve, with `bb gearshift policy set|unset|add-pattern|remove-pattern`, each validated
+like the editor's Save. Revert any of them in the editor (per-field revert, **Reset all**) or
+with `bb gearshift policy unset <path>`.
+
 **Spend less.** Raise the score bands (for example small 3–6, medium 7–9), or set the
 medium tier to a smaller model or lower effort.
 

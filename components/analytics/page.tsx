@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
-import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { DECISIONS_CHANGED } from "@/lib/channels";
 import type { OverviewDto, rpcContract } from "@/lib/contract";
 import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import { IMPROVE_RULES_HINT, buildReviewPrompt } from "@/components/review-prompt";
 import { cn } from "@/lib/utils";
 import { CostChart } from "./cost-chart";
 import { ModelMix, TierDistribution, Transitions } from "./distribution";
@@ -14,6 +16,7 @@ const RANGES = [7, 30, 90] as const;
 
 export function AnalyticsPage() {
   const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<OverviewDto | null>(null);
   const [failed, setFailed] = useState(false);
@@ -45,20 +48,34 @@ export function AnalyticsPage() {
             How Gearshift decides: it sizes each message, picks the smallest model and effort that fits, never
             downshifts a large cached context, and leaves models you pick by hand alone.
           </p>
-          <div role="group" aria-label="Range" className="inline-flex rounded-md border border-border p-0.5">
-            {RANGES.map((r) => (
+          <div className="flex flex-wrap items-center gap-2">
+            <span title={IMPROVE_RULES_HINT}>
               <Button
-                key={r}
                 type="button"
                 size="sm"
-                variant="ghost"
-                aria-pressed={days === r}
-                className={cn("h-7 px-3", days === r && "bg-state-active text-foreground")}
-                onClick={() => setDays(r)}
+                variant="outline"
+                aria-label={`Improve my rules. ${IMPROVE_RULES_HINT}`}
+                onClick={() => navigate.toCompose({ initialPrompt: buildReviewPrompt(days), focusPrompt: true })}
               >
-                {r} days
+                <Icon name="WandSparkles" className="size-3.5" aria-hidden="true" />
+                Improve my rules
               </Button>
-            ))}
+            </span>
+            <div role="group" aria-label="Range" className="inline-flex rounded-md border border-border p-0.5">
+              {RANGES.map((r) => (
+                <Button
+                  key={r}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-pressed={days === r}
+                  className={cn("h-7 px-3", days === r && "bg-state-active text-foreground")}
+                  onClick={() => setDays(r)}
+                >
+                  {r} days
+                </Button>
+              ))}
+            </div>
           </div>
         </header>
 
