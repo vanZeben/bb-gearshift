@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPolicyEdit, type PolicyEdit } from "./policy-edit";
+import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./policy-edit";
 import { DEFAULT_POLICY, diffOverrides, mergePolicy, validatePolicy, type Policy } from "./policy";
 
 const D = DEFAULT_POLICY;
@@ -109,6 +109,102 @@ describe("applyPolicyEdit: scoring", () => {
   });
 });
 
+describe("applyPolicyEdit: length rules", () => {
+  const first = D.scoring.length[0]!;
+  it("edits overChars and add by index", () => {
+    const a = ok(set("scoring.length.0.overChars", "600"));
+    expect(a.policy.scoring.length[0]).toEqual({ ...first, overChars: 600 });
+    expect(a.before).toBe(String(first.overChars));
+    expect(a.after).toBe("600");
+    expect(ok(set("scoring.length.1.add", "3")).policy.scoring.length[1]!.add).toBe(3);
+  });
+  it("unset restores the field from the same default index", () => {
+    const changed = ok(set("scoring.length.0.add", "4")).policy;
+    expect(ok(unset("scoring.length.0.add"), changed).policy.scoring.length).toEqual(D.scoring.length);
+  });
+  it("unset errors when the defaults have no rule at that index", () => {
+    const extended = { ...D, scoring: { ...D.scoring, length: [...D.scoring.length, { overChars: 99999, add: 1 }] } };
+    expect(err(unset(`scoring.length.${D.scoring.length.length}.add`), extended)).toMatch(/defaults have no length rule/);
+  });
+  it("lists the current rules for an out-of-range index", () => {
+    const e = err(set(`scoring.length.${D.scoring.length.length}.add`, "1"));
+    expect(e).toMatch(/No length rule at index/);
+    expect(e).toContain(`0: over ${first.overChars} chars +${first.add}`);
+  });
+  it("rejects negative and non-integer indexes", () => {
+    for (const i of ["-1", "1.5", "x", ""]) expect(err(set(`scoring.length.${i}.add`, "1"))).toMatch(/whole number/);
+  });
+  it("rejects bad values", () => {
+    expect(err(set("scoring.length.0.add", "lots"))).toMatch(/number/);
+    expect(err(set("scoring.length.0.add", "-1"))).toBeTruthy();
+    expect(err(set("scoring.length.0.overChars", "-5"))).toBeTruthy();
+    expect(err(set("scoring.length.0.overChars", "Infinity"))).toMatch(/number/);
+  });
+});
+
+describe("applyPolicyEdit: files pattern and explicit model", () => {
+  it("sets and unsets scoring.files.pattern", () => {
+    const r = ok(set("scoring.files.pattern", "\\b[\\w./-]+\\.rs\\b"));
+    expect(r.policy.scoring.files.pattern).toBe("\\b[\\w./-]+\\.rs\\b");
+    expect(ok(unset("scoring.files.pattern"), r.policy).policy.scoring.files.pattern).toBe(D.scoring.files.pattern);
+  });
+  it("rejects an unsafe, invalid or empty files pattern", () => {
+    expect(err(set("scoring.files.pattern", "(a+)+$"))).toMatch(/scoring\.files\.pattern/);
+    expect(err(set("scoring.files.pattern", "("))).toMatch(/scoring\.files\.pattern/);
+    expect(err(set("scoring.files.pattern", " "))).toMatch(/empty/);
+  });
+  it("sets and unsets explicitModel.enabled", () => {
+    const off = ok(set("explicitModel.enabled", "off"));
+    expect(off.policy.explicitModel.enabled).toBe(false);
+    expect(ok(unset("explicitModel.enabled"), off.policy).policy.explicitModel.enabled).toBe(D.explicitModel.enabled);
+    expect(err(set("explicitModel.enabled", "maybe"))).toMatch(/true or false/);
+  });
+  it("sets and unsets explicitModel.pattern, rejecting unsafe regexes", () => {
+    const r = ok(set("explicitModel.pattern", "\\buse (opus|sonnet)\\b"));
+    expect(r.policy.explicitModel.pattern).toBe("\\buse (opus|sonnet)\\b");
+    expect(ok(unset("explicitModel.pattern"), r.policy).policy.explicitModel.pattern).toBe(D.explicitModel.pattern);
+    expect(err(set("explicitModel.pattern", "(a+)+$"))).toMatch(/explicitModel\.pattern/);
+    expect(err(set("explicitModel.pattern", "["))).toMatch(/explicitModel\.pattern/);
+  });
+});
+
+describe("applyPolicyEdit: plain pattern lists", () => {
+  const lists = {
+    "scoring.trivial.patterns": (p: Policy) => p.scoring.trivial.patterns,
+    "scoring.trivial.leading": (p: Policy) => p.scoring.trivial.leading,
+    "scoring.continuation.patterns": (p: Policy) => p.scoring.continuation.patterns,
+    "scoring.question.patterns": (p: Policy) => p.scoring.question.patterns,
+    skipPatterns: (p: Policy) => p.skipPatterns,
+  };
+  for (const [name, get] of Object.entries(lists)) {
+    it(`adds and removes a pattern in ${name}`, () => {
+      const added = ok({ op: "add-pattern", classId: name, pattern: "\\bzzz\\b" });
+      expect(get(added.policy).at(-1)).toBe("\\bzzz\\b");
+      expect(added.path).toBe(name);
+      expect(added.after).toMatch(/\+ /);
+      const removed = ok({ op: "remove-pattern", classId: name, pattern: "\\bzzz\\b" }, added.policy);
+      expect(get(removed.policy)).toEqual(get(D));
+    });
+    it(`rejects duplicate, missing, empty and unsafe patterns in ${name}`, () => {
+      const existing = get(D)[0];
+      if (existing) expect(err({ op: "add-pattern", classId: name, pattern: existing })).toMatch(/already/);
+      expect(err({ op: "remove-pattern", classId: name, pattern: "nope" })).toMatch(/no such pattern/);
+      expect(err({ op: "add-pattern", classId: name, pattern: " " })).toMatch(/empty/);
+      expect(err({ op: "add-pattern", classId: name, pattern: "(a+)+$" })).toBeTruthy();
+      expect(err({ op: "add-pattern", classId: name, pattern: "(" })).toBeTruthy();
+    });
+  }
+  it("names the valid lists and classes for an unknown target", () => {
+    const e = err({ op: "add-pattern", classId: "nope", pattern: "x" });
+    expect(e).toMatch(/Unknown scoring class/);
+    for (const n of Object.keys(lists)) expect(e).toContain(n);
+    expect(e).toContain(D.scoring.classes[0]!.id);
+  });
+  it("does not treat inherited object keys as lists", () => {
+    expect(err({ op: "add-pattern", classId: "toString", pattern: "x" })).toMatch(/Unknown scoring class/);
+  });
+});
+
 describe("applyPolicyEdit: patterns", () => {
   const id = D.scoring.classes[0]!.id;
   it("adds and removes a pattern", () => {
@@ -125,6 +221,15 @@ describe("applyPolicyEdit: patterns", () => {
     expect(err({ op: "add-pattern", classId: id, pattern: "(" })).toBeTruthy();
     expect(err({ op: "add-pattern", classId: id, pattern: "(a+)+$" })).toBeTruthy();
     expect(err({ op: "add-pattern", classId: id, pattern: " " })).toMatch(/empty/);
+  });
+});
+
+describe("POLICY_PATHS", () => {
+  it("mentions every editable path family, including the pattern list targets", () => {
+    const text = POLICY_PATHS.join("\n");
+    for (const needle of ["scoring.length.<index>", "scoring.files.atLeast | add | pattern", "explicitModel.enabled | pattern", "add-pattern", "scoring.trivial.leading", "skipPatterns", "scoring.question.patterns", "scoring.continuation.patterns", "scoring.trivial.patterns"]) {
+      expect(text).toContain(needle);
+    }
   });
 });
 
