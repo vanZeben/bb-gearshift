@@ -11,6 +11,16 @@ export type PolicyEdit =
 export interface PolicyEditError { error: string }
 export interface PolicyEditResult { policy: Policy; path: string; before: string; after: string }
 
+/** Plain pattern lists that add-pattern / remove-pattern can edit besides a scoring class's own patterns. */
+const PATTERN_LISTS: Record<string, (p: Policy) => string[]> = {
+  "scoring.trivial.patterns": (p) => p.scoring.trivial.patterns,
+  "scoring.trivial.leading": (p) => p.scoring.trivial.leading,
+  "scoring.continuation.patterns": (p) => p.scoring.continuation.patterns,
+  "scoring.question.patterns": (p) => p.scoring.question.patterns,
+  skipPatterns: (p) => p.skipPatterns,
+};
+const listNames = () => Object.keys(PATTERN_LISTS).join(", ");
+
 /** The path grammar, for help text and error messages. */
 export const POLICY_PATHS = [
   "tiers.<tier>.min | max",
@@ -20,9 +30,12 @@ export const POLICY_PATHS = [
   "scoring.trivial.maxChars",
   "scoring.continuation.maxChars",
   "scoring.components.addPerExtraGroup | cap",
-  "scoring.files.atLeast | add",
+  "scoring.files.atLeast | add | pattern",
+  "scoring.length.<index>.overChars | add",
   "scoring.unmatchedScore",
+  "explicitModel.enabled | pattern",
   "roles.<role>.budget.<tier>",
+  `(add-pattern | remove-pattern) <target> <regex>, where <target> is a scoring class id or one of: ${listNames()}`,
 ] as const;
 
 type Kind = "number" | "boolean" | "string";
@@ -92,6 +105,29 @@ function resolveTarget(path: string): Target | PolicyEditError {
     const sec = s[1] as "question" | "trivial" | "continuation" | "components" | "files";
     return scalar((p) => p.scoring[sec] as unknown as Record<string, unknown>, s[2]!, "number");
   }
+  if (s[0] === "scoring" && s[1] === "files" && s.length === 3 && s[2] === "pattern") return scalar((p) => p.scoring.files as unknown as Record<string, unknown>, "pattern", "string");
+  if (s[0] === "explicitModel" && s.length === 2 && (s[1] === "enabled" || s[1] === "pattern")) {
+    return scalar((p) => p.explicitModel as unknown as Record<string, unknown>, s[1], s[1] === "enabled" ? "boolean" : "string");
+  }
+  if (s[0] === "scoring" && s[1] === "length" && s.length >= 4 && (s[s.length - 1] === "overChars" || s[s.length - 1] === "add")) {
+    const rawIndex = s.slice(2, -1).join("."), k = s[s.length - 1] as "overChars" | "add";
+    if (!/^\d+$/.test(rawIndex)) return bad(`scoring.length index must be a whole number from 0, got "${rawIndex}"`);
+    const i = Number(rawIndex);
+    return {
+      kind: "number", optional: false,
+      read: (p) => p.scoring.length[i]?.[k],
+      write: (p, v) => {
+        const rule = p.scoring.length[i];
+        if (!rule) {
+          const rules = p.scoring.length.map((r, n) => `${n}: over ${r.overChars} chars +${r.add}`).join(", ");
+          return `No length rule at index ${i}. Rules: ${rules || "(none)"}`;
+        }
+        if (v === undefined) return `The defaults have no length rule at index ${i}`;
+        rule[k] = v as number;
+        return null;
+      },
+    };
+  }
   if (s[0] === "scoring" && s.length === 2 && s[1] === "unmatchedScore") return scalar((p) => p.scoring as unknown as Record<string, unknown>, "unmatchedScore", "number");
   if (s[0] === "roles" && s.length === 4 && s[2] === "budget" && isTier(s[3]!)) {
     const role = s[1]!, t = s[3];
@@ -144,20 +180,23 @@ export function applyPolicyEdit(effective: Policy, defaults: Policy, edit: Polic
   let path: string, before: string, after: string;
 
   if (edit.op === "add-pattern" || edit.op === "remove-pattern") {
-    path = `scoring.classes.${edit.classId}.patterns`;
-    const c = next.scoring.classes.find((x) => x.id === edit.classId);
-    if (!c) return bad(`Unknown scoring class "${edit.classId}". Classes: ${next.scoring.classes.map((x) => x.id).join(", ")}`);
+    const listOf = Object.hasOwn(PATTERN_LISTS, edit.classId) ? PATTERN_LISTS[edit.classId] : undefined;
+    const c = listOf ? undefined : next.scoring.classes.find((x) => x.id === edit.classId);
+    if (!listOf && !c) return bad(`Unknown scoring class or pattern list "${edit.classId}". Lists: ${listNames()}. Classes: ${next.scoring.classes.map((x) => x.id).join(", ")}`);
+    const list = listOf ? listOf(next) : c!.patterns;
+    const label = listOf ? `List "${edit.classId}"` : `Class "${edit.classId}"`;
+    path = listOf ? edit.classId : `scoring.classes.${edit.classId}.patterns`;
     if (!edit.pattern.trim()) return bad("The pattern cannot be empty");
-    before = `${c.patterns.length} patterns`;
+    before = `${list.length} patterns`;
     if (edit.op === "add-pattern") {
-      if (c.patterns.includes(edit.pattern)) return bad(`Class "${c.id}" already has that pattern`);
-      c.patterns.push(edit.pattern);
+      if (list.includes(edit.pattern)) return bad(`${label} already has that pattern`);
+      list.push(edit.pattern);
     } else {
-      const at = c.patterns.indexOf(edit.pattern);
-      if (at < 0) return bad(`Class "${c.id}" has no such pattern. Patterns:\n  ${c.patterns.join("\n  ")}`);
-      c.patterns.splice(at, 1);
+      const at = list.indexOf(edit.pattern);
+      if (at < 0) return bad(`${label} has no such pattern. Patterns:\n  ${list.join("\n  ")}`);
+      list.splice(at, 1);
     }
-    after = `${c.patterns.length} patterns (${edit.op === "add-pattern" ? "+" : "-"} ${edit.pattern})`;
+    after = `${list.length} patterns (${edit.op === "add-pattern" ? "+" : "-"} ${edit.pattern})`;
   } else {
     path = edit.path.trim();
     const target = resolveTarget(path);
