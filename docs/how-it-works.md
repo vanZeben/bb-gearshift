@@ -11,6 +11,7 @@ contracts between the pieces (RPC schemas, storage schema, decision rules) live 
 - [Fail-open guarantees](#fail-open-guarantees)
 - [Data and privacy](#data-and-privacy)
 - [Analytics](#analytics)
+- [Reviewing routing](#reviewing-routing)
 - [Extending Gearshift](#extending-gearshift)
 
 ## Architecture
@@ -158,6 +159,19 @@ When a thread goes idle, Gearshift reads the finished turn's token usage from bb
 events and attaches it to the decision that started the turn. Cost uses built-in public list
 prices (`DEFAULT_POLICY.prices`); the "top gear" comparison prices the same usage at the
 provider's xlarge gear. Models without a known price are counted in tokens only.
+
+## Reviewing routing
+
+`bb gearshift review [--days N] [--json]` turns the stored decisions of a period into a report:
+messages per tier and action, output-token percentiles per tier, cost per gear, how much cost
+sits in held turns, hand-picked models, routed messages that look oversized or undersized for
+the work they produced, how reliably each signal predicts large work, and a few hints with
+their evidence numbers. It reads only stored metadata (lengths, signals, scores, token usage
+and thread ids). No message text exists in storage, so the report cannot contain any.
+
+The **Improve my rules** button on the analytics page opens a new-thread draft that asks an
+agent to run the report and propose changes. The agent opens one of the listed threads only if
+you agree, and applies only the changes you approve.
 
 ## Extending Gearshift
 

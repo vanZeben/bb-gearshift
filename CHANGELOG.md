@@ -6,6 +6,11 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Improve my rules** button on the analytics page: opens a new-thread draft that asks an agent to review your routing and propose rule changes you approve.
+- `bb gearshift review [--days N] [--json]` reports tiers, holds, likely over- and under-sized gears and signal precision from stored metadata, and `bb gearshift policy set|unset|add-pattern|remove-pattern` edits one policy value at a time. The skill documents the workflow.
+
 ## [0.2.2] - 2026-11-20
 
 ### Fixed

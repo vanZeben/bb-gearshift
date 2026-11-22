@@ -20,7 +20,19 @@ Gearshift picks the model and reasoning effort per message: small asks go to a s
 | `bb gearshift off --thread <id>` | Turn routing off for a thread. |
 | `bb gearshift explain <text...> [--provider <id>]` | Show the tier and gear a message would get. No side effects. |
 | `bb gearshift policy` | Print the routing policy in effect (read-only). |
+| `bb gearshift review [--days N] [--json]` | Routing report from stored decisions (see "Review and tune routing"). |
+| `bb gearshift policy set\|unset\|add-pattern\|remove-pattern ...` | Edit one saved policy value; validated like the editor's Save. |
 | `bb plugin config gearshift set <key> <value>` | Change a setting: `enabled`, `defaultOn`, `respectManualPicks`, `routeAgentMessages`, `holdAboveTokens`, `routeNotes`, `retentionDays`. |
+
+## Review and tune routing
+
+Use this when the user asks to improve, tune or audit their routing, or starts from the analytics page's "Improve my rules" button.
+
+1. Run `bb gearshift review --days N` (default 30). Read the tier shares, holds, the overkill list (large or x-large turns with little output), the underkill list, signal precision and the hints. The report holds metadata only, plus thread ids.
+2. Only with the user's OK, open a few listed threads (`bb thread show <id>`, or read their messages) to judge whether the gear fit. A task can look large while prior art or an existing skill makes it easy, so judge by the work the turn did, not just the wording.
+3. Check candidate changes with `bb gearshift explain "<text>"`.
+4. Propose a short numbered list of changes, each with its evidence and expected effect. Wait for approval.
+5. Apply only the approved ones with `bb gearshift policy set <path> <value>`, `policy unset <path>`, `policy add-pattern <classId> <regex>` or `policy remove-pattern <classId> <regex>`, then run `bb gearshift policy` and show the result. Tell the user every change can be reverted in the editor (per-field revert, Reset all) or with `policy unset`.
 
 ## Sub-agents: `gearshift_spawn`
 

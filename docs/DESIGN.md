@@ -414,6 +414,17 @@ preferred medium). Efforts clamp to what the model supports, never picking a
 provider-specific level such as `ultracode` implicitly. `serviceTier` applies only when the
 resolved model lists that tier in `supportedServiceTiers`.
 
+## Review and policy edits (`lib/review.ts`, `lib/policy-edit.ts`, pure)
+
+`buildReview(rows, policy, { days, now })` summarizes stored decisions in the window: counts
+by action, per-tier share, score and output-token percentiles, cost per gear, the cost of
+holds, hand-picked models, overkill and underkill candidates, per-signal precision and hints
+with named thresholds. `formatReview` renders it as text. It reads only stored metadata.
+`applyPolicyEdit(effective, defaults, edit)` applies one `set`, `unset`, `add-pattern` or
+`remove-pattern` edit to the effective policy, or returns an error; the CLI then diffs against
+the defaults and saves through the same validation as the `savePolicy` RPC. The analytics
+page's **Improve my rules** button only seeds a new-thread draft (`components/review-prompt.ts`).
+
 ## Teams and sub-agents (`lib/team.ts`, `server.ts`)
 
 Policy schema (both are plain policy keys, merged like `gears`; roles replace per role name and per provider key):
@@ -727,5 +738,10 @@ writes `thread_prefs` from it and deletes it.
 
 `bb gearshift status [--thread <id>]`, `bb gearshift on|off --thread <id>`,
 `bb gearshift explain <text…> [--provider <id>]` (classification and gear, no side effects).
+`bb gearshift review [--days N] [--json]` prints the routing report (`lib/review.ts`), default
+30 days. `bb gearshift policy set <path> <value>`, `policy unset <path>`,
+`policy add-pattern <classId> <regex>` and `policy remove-pattern <classId> <regex>` edit the
+saved overrides one plain value at a time (`lib/policy-edit.ts`), validated like the editor's
+Save; invalid edits store nothing.
 `skills/gearshift/SKILL.md` tells agents that Gearshift picks the model per message, that
 "use opus" in a message overrides it, and how to use the commands.

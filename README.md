@@ -107,7 +107,7 @@ Gearshift needs bb 0.50 or later. It has no account, API key or external service
 
 1. **Send a message in any thread.** The gear pill next to the send button shows where it will run, for example `Auto · Sonnet 5.5 · High`, and updates as you type.
 2. **Click the pill** to see why: the score, the signals that matched, and the last shift. The switch there turns Gearshift off for that thread.
-3. **Open Gearshift in the sidebar** for the analytics page: messages routed, shift rate, tier and model mix, daily cost against always using the top gear, and recent decisions.
+3. **Open Gearshift in the sidebar** for the analytics page: messages routed, shift rate, tier and model mix, daily cost against always using the top gear, and recent decisions. **Improve my rules** in its header opens a new thread with a review prompt: an agent reads your routing history, judges whether each gear fit, and proposes changes you approve one by one.
 4. **Try orchestration.** Send a medium or larger task, such as "port the billing service into a plugin". The agent gets a team note and can start sub-agents. Open **Gearshift** in the sidebar and look at the **Sub-agents** card for their spend, and at the **Teams** tab in the policy editor to change who runs on what.
 5. **Tune it** in **Settings → Plugins → Gearshift**. The **Try a message** box shows how a draft would route before you save.
 
@@ -127,6 +127,10 @@ Everything is an ordinary setting in **Settings → Plugins → Gearshift**. The
 
 Below them, the **Routing policy** editor sets the gears for each provider (model, effort and service tier per tier), the scoring signals and score bands, with Gearshift's defaults filled in. Your changes sit on top of the defaults, so you keep getting improved defaults for everything you didn't change. See [the routing policy guide](docs/routing-policy.md).
 
+### Tuning from your own usage
+
+Not sure which numbers to change? Open the analytics page and click **Improve my rules**. It starts a new thread whose first message asks an agent to run `bb gearshift review`, judge from your own history whether the gears fit, and propose a short list of changes. Nothing is applied until you approve it, and every change can be reverted in the editor. See [Let an agent tune it](docs/routing-policy.md#tuning-recipes).
+
 ## Commands
 
 Gearshift adds a `bb gearshift` command, and ships a skill so agents can use it:
@@ -137,6 +141,11 @@ bb gearshift on --thread <id>                     # turn it on for a thread
 bb gearshift off --thread <id>                    # turn it off for a thread
 bb gearshift explain "<text>" [--provider <id>]   # how a message would score, no side effects
 bb gearshift policy                               # the routing policy in effect
+bb gearshift review [--days N] [--json]           # routing report: tiers, holds, likely over- and under-sized gears
+bb gearshift policy set <path> <value>            # change one policy value, e.g. tiers.large.max 12
+bb gearshift policy unset <path>                  # restore one value to its default
+bb gearshift policy add-pattern <classId> <regex> # add a scoring pattern to a signal class
+bb gearshift policy remove-pattern <classId> <regex>
 bb plugin config gearshift set defaultOn false    # change a setting
 ```
 
