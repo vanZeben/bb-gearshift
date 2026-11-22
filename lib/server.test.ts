@@ -479,6 +479,74 @@ describe("budget guard", () => {
   });
 });
 
+describe("CLI review and policy edits", () => {
+  type Run = (argv: string[], ctx: Record<string, unknown>) => Promise<{ exitCode: number; stdout?: string; stderr?: string }>;
+  async function cli() {
+    const s = await setup();
+    const run = s.harness.inspection.registrations.cli!.run as unknown as Run;
+    const getPolicy = () => s.harness.behavior.callRpc("getPolicy", null) as Promise<{ overrides: Record<string, unknown>; effective: { tiers: Record<string, { min: number; max: number }> } }>;
+    return { ...s, run, getPolicy };
+  }
+
+  it("review prints text, --json prints the object, and bad --days is rejected", async () => {
+    const c = await cli();
+    c.db.prepare("INSERT INTO decisions (at, thread_id, provider_id, initiator, attempt, action, reason, tier, score, signals) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(Date.now() - 1000, "thr-9", "claude-code", "user", "start-turn", "shift", "", "large", 10, '["build"]');
+    const text = await c.run(["review", "--days", "7"], {});
+    expect(text.exitCode).toBe(0);
+    expect(text.stdout).toContain("last 7 days");
+    expect(text.stdout).toContain("Large: 1");
+    const json = await c.run(["review", "--json"], {});
+    const parsed = JSON.parse(json.stdout!) as { period: { days: number }; counts: { total: number } };
+    expect(parsed.period.days).toBe(30);
+    expect(parsed.counts.total).toBe(1);
+    for (const bad of ["0", "366", "abc", "1.5"]) expect(await c.run(["review", "--days", bad], {})).toMatchObject({ exitCode: 1 });
+  });
+
+  it("policy set stores minimal overrides, prints old to new and updates routing", async () => {
+    const c = await cli();
+    const r = await c.run(["policy", "set", "tiers.large.max", "12"], {});
+    expect(r).toMatchObject({ exitCode: 0, stdout: "tiers.large.max: 11 → 12" });
+    const state = await c.getPolicy();
+    expect(state.overrides).toEqual({ tiers: { large: { max: 12 }, xlarge: { min: 13 } } });
+    expect(state.effective.tiers.xlarge!.min).toBe(13);
+    const printed = JSON.parse((await c.run(["policy"], {})).stdout!) as { tiers: Record<string, { max: number }> };
+    expect(printed.tiers.large!.max).toBe(12);
+  });
+
+  it("unset, add-pattern and remove-pattern round-trip", async () => {
+    const c = await cli();
+    await c.run(["policy", "set", "gears.claude-code.xlarge.effort", "high"], {});
+    expect((await c.getPolicy()).overrides).toHaveProperty("gears");
+    expect(await c.run(["policy", "unset", "gears.claude-code.xlarge.effort"], {})).toMatchObject({ exitCode: 0 });
+    expect((await c.getPolicy()).overrides).toEqual({});
+    expect(await c.run(["policy", "add-pattern", "action", "\\bzzz\\b"], {})).toMatchObject({ exitCode: 0 });
+    expect((await c.getPolicy()).overrides).toHaveProperty("scoring");
+    expect(await c.run(["policy", "remove-pattern", "action", "\\bzzz\\b"], {})).toMatchObject({ exitCode: 0 });
+    expect((await c.getPolicy()).overrides).toEqual({});
+  });
+
+  it("invalid edits exit 1 and store nothing", async () => {
+    const c = await cli();
+    for (const argv of [["policy", "set", "tiers.large.max", "8"], ["policy", "set", "nope", "1"], ["policy", "set", "scoring.unmatchedScore", "x"], ["policy", "add-pattern", "action", "(a+)+$"], ["policy", "set", "tiers.large.max"], ["policy", "bogus"]]) {
+      expect(await c.run(argv, {})).toMatchObject({ exitCode: 1 });
+    }
+    expect((await c.getPolicy()).overrides).toEqual({});
+  });
+
+  it("policy edits are global: allowed for any calling thread", async () => {
+    const c = await cli();
+    expect(await c.run(["policy", "set", "scoring.unmatchedScore", "2"], { threadId: "some-agent-thread" })).toMatchObject({ exitCode: 0 });
+  });
+
+  it("help lists the new commands", async () => {
+    const c = await cli();
+    const help = await c.run(["help"], {});
+    expect(help.stdout).toContain("bb gearshift review");
+    expect(help.stdout).toContain("add-pattern");
+  });
+});
+
 describe("listModels host fallback", () => {
   it("falls back to per-host queries when the plain call fails", async () => {
     const calls: Array<Record<string, unknown>> = [];

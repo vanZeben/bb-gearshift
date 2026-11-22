@@ -6,7 +6,9 @@ import { bounded } from "./lib/bounded";
 import { DECISIONS_CHANGED } from "./lib/channels";
 import { rpcContract, type PolicyStateDto, type PreviewDto, type ProvidersDto, type ThreadStateDto } from "./lib/contract";
 import { resolveGear, sizeClass, toCatalog, type CatalogModel, type Gear } from "./lib/gears";
-import { DEFAULT_POLICY, compilePolicy, ladderFor, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
+import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
+import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
+import { buildReview, formatReview } from "./lib/review";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
@@ -660,7 +662,8 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // ---- CLI -------------------------------------------------------------
-  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift policy\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
+  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
+  const policyUsage = `Policy paths:\n  ${POLICY_PATHS.join("\n  ")}\n  add-pattern / remove-pattern take a scoring class id and a regex`;
   bb.cli.register({
     name: "gearshift",
     summary: "Automatic model routing: status, per-thread toggle, explain a routing decision",
@@ -668,7 +671,8 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "status", summary: "Show whether Gearshift is on, and the last decision", usage: "bb gearshift status [--thread <id>]" },
       { name: "on", summary: "Turn Gearshift on for a thread", usage: "bb gearshift on --thread <id>" },
       { name: "off", summary: "Turn Gearshift off for a thread", usage: "bb gearshift off --thread <id>" },
-      { name: "policy", summary: "Print the effective routing policy as JSON (read-only; edit it in Gearshift settings)", usage: "bb gearshift policy" },
+      { name: "review", summary: "Report on the last N days of routing: tiers, holds, manual picks, overkill and underkill, tuning hints", usage: "bb gearshift review [--days N] [--json]" },
+      { name: "policy", summary: "Print the effective routing policy as JSON, or edit one value of it (global, validated like the editor's Save)", usage: "bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]" },
       { name: "spawn", summary: "Spawn a sub-agent thread for a team role on its policy gear and budget", usage: "bb gearshift spawn --role <role> [--thread <id>] <prompt...>" },
       { name: "explain", summary: "Classify text and show the gear it would get", usage: "bb gearshift explain <text...> [--provider <id>]" },
     ],
@@ -706,7 +710,29 @@ export default async function plugin(bb: BbPluginApi) {
           store.setPref(threadId, cmd === "on"); changed(threadId);
           return { exitCode: 0, stdout: `Gearshift ${cmd} for ${threadId}` };
         }
+        case "review": {
+          const d = flag("--days");
+          const days = d === undefined ? 30 : Number(d);
+          if (!Number.isInteger(days) || days < 1 || days > 365) return { exitCode: 1, stderr: "--days must be a whole number from 1 to 365" };
+          const now = Date.now();
+          const review = buildReview(store.since(now - days * DAY), compiled.policy, { days, now });
+          return { exitCode: 0, stdout: argv.includes("--json") ? JSON.stringify(review, null, 2) : formatReview(review) };
+        }
         case "policy": {
+          if (argv.length > 1) {
+            const [, op, a, ...rest] = argv;
+            const bad = (m: string) => ({ exitCode: 1, stderr: `${m}\n${policyUsage}` });
+            let edit: PolicyEdit;
+            if (op === "set") { if (!a || rest.length === 0) return bad("set needs a path and a value"); edit = { op, path: a, value: rest.join(" ") }; }
+            else if (op === "unset") { if (!a || rest.length) return bad("unset needs exactly a path"); edit = { op, path: a }; }
+            else if (op === "add-pattern" || op === "remove-pattern") { if (!a || rest.length === 0) return bad(`${op} needs a class id and a regex`); edit = { op, classId: a, pattern: rest.join(" ") }; }
+            else return bad(`Unknown policy command "${op}"`);
+            const r = applyPolicyEdit(mergePolicy(DEFAULT_POLICY, overrides), DEFAULT_POLICY, edit);
+            if ("error" in r) return { exitCode: 1, stderr: r.error };
+            const saved = await storeOverrides(diffOverrides(DEFAULT_POLICY, r.policy));
+            if (!saved.ok) return { exitCode: 1, stderr: `Not saved: ${saved.errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "unknown error"}` };
+            return { exitCode: 0, stdout: `${r.path}: ${r.before} → ${r.after}` };
+          }
           const lines = [JSON.stringify(compiled.policy, null, 2)];
           if (policyErrors.length) lines.push(`# Saved policy is invalid, routing with defaults: ${policyErrors.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
           return { exitCode: 0, stdout: lines.join("\n") };
