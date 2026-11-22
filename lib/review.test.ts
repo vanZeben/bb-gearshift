@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildReview, formatReview, type Review } from "./review";
+import { buildReview, formatReview, reviewThreadIds, withTitles, type Review } from "./review";
 import { DEFAULT_POLICY } from "./policy";
 import type { DecisionRow } from "./store";
 
@@ -208,5 +208,158 @@ describe("formatReview", () => {
     expect(text).toContain("X-large: 8");
     expect(text).toContain("thread t1");
     expect(text).not.toMatch(/\p{Extended_Pictographic}/u);
+  });
+});
+
+describe("hold origins", () => {
+  // Ids are explicit so origins are easy to read; `at` grows with the id.
+  const at = (id: number) => NOW - 10 * DAY + id * 1000;
+  const row = (id: number, o: Partial<DecisionRow> = {}) => r({ id, at: at(id), thread_id: "t1", ...o });
+  const held = (id: number, o: Partial<DecisionRow> = {}) => row(id, { action: "hold", ...xl({ output_tokens: 300, cost_usd: 2 }), ...o });
+
+  it("flags held overkill rows and reads the inherited gear from current_model/current_effort", () => {
+    const rv = build([row(1, xl({ action: "keep" })), held(2, { hold_kind: "gear", hold_origin_id: 1, current_model: "Opus 5.5", current_effort: "xhigh" }), row(3, { tier: "large", output_tokens: 10 })]);
+    const turn = rv.overkill.find((t) => t.id === 2)!;
+    expect(turn).toMatchObject({ held: true, holdKind: "gear", inheritedGear: "Opus 5.5 · XHigh", holdOriginId: 1 });
+    expect(rv.overkill.find((t) => t.id === 3)).toMatchObject({ held: false, holdKind: null, inheritedGear: null, holdOriginId: null });
+    expect(formatReview(rv)).toContain("held (gear) from #1 on Opus 5.5 · XHigh");
+  });
+  it("flags held underkill rows", () => {
+    const rv = build([row(1, xl({ action: "keep" })), row(2, { action: "hold", tier: "small", output_tokens: 20_000, hold_kind: "effort", hold_origin_id: 1 })]);
+    expect(rv.underkill[0]).toMatchObject({ id: 2, held: true, holdKind: "effort", holdOriginId: 1 });
+  });
+  it("falls back to the origin row's routed gear when there is no current gear", () => {
+    const rv = build([row(1, xl({ action: "keep" })), held(2, { hold_origin_id: 1 })]);
+    expect(rv.overkill.find((t) => t.id === 2)).toMatchObject({ inheritedGear: "Opus · XHigh", holdKind: null });
+  });
+  it("leaves the inherited gear null when neither the current gear nor the origin row is known", () => {
+    const turn = build([held(2, { hold_origin_id: 99 })]).overkill[0]!;
+    expect(turn).toMatchObject({ holdOriginId: 99, inheritedGear: null });
+  });
+  it("derives the origin for legacy rows from the newest earlier gear-setting row of the same thread", () => {
+    const rv = build([
+      row(1, xl({ action: "shift" })),
+      row(2, { thread_id: "other", action: "shift" }),
+      row(3, { action: "skip", tier: null }),
+      row(4, { attempt: "join-turn", action: "keep" }),
+      held(5),
+    ]);
+    expect(rv.overkill[0]).toMatchObject({ id: 5, holdOriginId: 1, inheritedGear: "Opus · XHigh" });
+  });
+  it("treats a manual pick as the origin", () => {
+    const rv = build([row(1, { action: "manual", tier: null, requested_model: "opus", requested_effort: "max" }), held(2)]);
+    expect(rv.overkill[0]).toMatchObject({ holdOriginId: 1, inheritedGear: "opus · Max" });
+  });
+  it("follows a chain of legacy holds back to the row that set the gear", () => {
+    const rv = build([row(1, xl({ action: "keep" })), held(2), held(3), held(4)]);
+    expect(rv.holds.topOrigins).toHaveLength(1);
+    expect(rv.holds.topOrigins[0]).toMatchObject({ originId: 1, heldTurns: 3, heldCostUsd: 6 });
+    expect(rv.overkill.map((t) => t.holdOriginId)).toEqual([1, 1, 1]);
+  });
+  it("prefers the stored origin over deriving one, and has none to derive without an earlier row", () => {
+    const rv = build([row(1, xl({ action: "keep" })), row(2, xl({ action: "shift" })), held(3, { hold_origin_id: 1 }), held(7, { thread_id: "lonely" })]);
+    expect(rv.overkill.find((t) => t.id === 3)!.holdOriginId).toBe(1);
+    expect(rv.overkill.find((t) => t.id === 7)!.holdOriginId).toBeNull();
+    expect(rv.holds.topOrigins.map((o) => o.originId)).toEqual([1]);
+  });
+  it("ranks origins by held cost and caps the list", () => {
+    const rv = build([
+      row(1, xl({ action: "keep", thread_id: "a" })), row(2, xl({ action: "keep", thread_id: "b", tier: "large" })),
+      held(3, { thread_id: "a", hold_origin_id: 1, cost_usd: 1 }), held(4, { thread_id: "b", hold_origin_id: 2, cost_usd: 5 }), held(5, { thread_id: "b", hold_origin_id: 2, cost_usd: 1 }),
+    ]);
+    expect(rv.holds.topOrigins).toEqual([
+      { originId: 2, threadId: "b", at: new Date(at(2)).toISOString(), gear: "Opus · XHigh", tier: "large", heldTurns: 2, heldCostUsd: 6 },
+      { originId: 1, threadId: "a", at: new Date(at(1)).toISOString(), gear: "Opus · XHigh", tier: "xlarge", heldTurns: 1, heldCostUsd: 1 },
+    ]);
+    const many20 = Array.from({ length: 20 }, (_, i) => held(100 + i, { thread_id: `x${i}`, hold_origin_id: 500 + i }));
+    expect(build(many20).holds.topOrigins).toHaveLength(15);
+  });
+  it("reports an origin outside the window or missing from the rows with no date or gear", () => {
+    const rv = build([row(1, xl({ action: "keep", at: NOW - 60 * DAY })), held(2, { hold_origin_id: 1 }), held(3, { thread_id: "t2", hold_origin_id: 404 })]);
+    expect(rv.holds.topOrigins.find((o) => o.originId === 404)).toEqual({ originId: 404, threadId: "t2", at: null, gear: null, tier: null, heldTurns: 1, heldCostUsd: 2 });
+    expect(rv.holds.topOrigins.find((o) => o.originId === 1)).toMatchObject({ at: new Date(NOW - 60 * DAY).toISOString(), gear: "Opus · XHigh" });
+    expect(formatReview(rv)).toContain("#404 (outside this period)");
+  });
+  it("counts hold kinds with cost, naming rows without a kind unknown", () => {
+    const rv = build([
+      held(1, { hold_kind: "gear", cost_usd: 3 }), held(2, { hold_kind: "gear", cost_usd: 1 }), held(3, { hold_kind: "effort", cost_usd: 1 }),
+      held(4, { hold_kind: "continuation", cost_usd: 0.5 }), held(5, { cost_usd: 0.25 }),
+    ]);
+    expect(rv.holds.kinds).toEqual([
+      { kind: "gear", n: 2, costUsd: 4 }, { kind: "effort", n: 1, costUsd: 1 }, { kind: "continuation", n: 1, costUsd: 0.5 }, { kind: "unknown", n: 1, costUsd: 0.25 },
+    ]);
+    expect(formatReview(rv)).toContain("hold kinds: gear 2 ($4.00), effort 1 ($1.00)");
+  });
+  it("counts downshifts separately from holds", () => {
+    const rv = build([row(1, { action: "shift", hold_kind: "downshift" }), row(2, { action: "shift", hold_kind: "downshift" }), row(3, { action: "shift" }), held(4)]);
+    expect(rv.holds.downshifts).toBe(2);
+    expect(rv.holds.n).toBe(1);
+    expect(formatReview(rv)).toContain("2 holds were waived for a cheaper model");
+  });
+  it("lists top origins in the formatted holds section", () => {
+    const text = formatReview(build([row(1, xl({ action: "keep" })), held(2, { hold_origin_id: 1 })]));
+    expect(text).toContain("Top hold origins");
+    expect(text).toMatch(/- #1 \d{4}-\d\d-\d\d \d\d:\d\dZ thread t1 xlarge on Opus · XHigh: 1 held turn, \$2\.00/);
+  });
+  it("points the hold-cost hint at holdEffortFollowsMessage and the origin turns", () => {
+    const h = build([...many(5, { action: "hold", cost_usd: 2 }), ...many(5, { cost_usd: 2 })]).hints.find((x) => x.id === "hold-cost");
+    expect(h?.message).toMatch(/holdEffortFollowsMessage/);
+    expect(h?.message).toMatch(/origins/);
+  });
+});
+
+describe("policy stamp", () => {
+  const CHANGED = NOW - 3 * DAY;
+  const rows = [
+    ...many(3, { policy_rev: "aaaa" }), ...many(2, { policy_rev: "bbbb", action: "hold" }), ...many(4, { policy_rev: null }), r({ policy_rev: "bbbb", action: "manual", tier: null }), r({ policy_rev: "cccc", action: "skip", tier: null }),
+  ];
+  const rv = buildReview(rows, DEFAULT_POLICY, { days: 30, now: NOW, policyRev: "aaaa", policyChangedAt: CHANGED });
+  it("counts routed decisions under an earlier policy and without a stamp", () => {
+    expect(rv.policy).toMatchObject({ rev: "aaaa", changedAt: new Date(CHANGED).toISOString(), routedDecisions: 9, olderDecisions: 2, unstampedDecisions: 4 });
+  });
+  it("prints a note under Current policy", () => {
+    const text = formatReview(rv);
+    expect(text).toContain("Policy last changed 2026-11-17 12:00Z; 2 of 9 decisions in the window were made under an earlier policy; 4 have no stamp (made before stamping)");
+    expect(text.indexOf("Policy last changed")).toBeGreaterThan(text.indexOf("Current policy"));
+  });
+  it("hints when the policy changed inside the window, and not when it changed before it", () => {
+    expect(rv.hints.map((h) => h.id)).toContain("policy-changed");
+    const old = buildReview(rows, DEFAULT_POLICY, { days: 30, now: NOW, policyRev: "aaaa", policyChangedAt: NOW - 90 * DAY });
+    expect(old.hints.map((h) => h.id)).not.toContain("policy-changed");
+    expect(buildReview(rows, DEFAULT_POLICY, { days: 30, now: NOW, policyRev: "aaaa", policyChangedAt: null }).hints.map((h) => h.id)).not.toContain("policy-changed");
+  });
+  it("defaults to no stamp info without options, and omits the note when there is nothing to say", () => {
+    const plain = build([r({ policy_rev: "aaaa" })]);
+    expect(plain.policy).toMatchObject({ rev: null, changedAt: null, olderDecisions: 0, unstampedDecisions: 0 });
+    expect(formatReview(plain)).not.toMatch(/Policy last changed|no stamp|earlier policy/);
+  });
+});
+
+describe("thread titles", () => {
+  const rv = build([
+    r({ tier: "large", output_tokens: 10, thread_id: "t1", id: 1 }), r({ tier: "xlarge", output_tokens: 10, thread_id: "t2", id: 2 }),
+    r({ tier: "small", output_tokens: 20_000, thread_id: "t3", id: 3 }),
+    r({ id: 4, thread_id: "t1", action: "keep", tier: "xlarge", output_tokens: 5000 }), r({ id: 5, thread_id: "t4", action: "hold", tier: "xlarge", output_tokens: 5000, hold_origin_id: 9, cost_usd: 1 }),
+  ]);
+  it("lists each thread once across overkill, underkill and top origins", () => {
+    expect(reviewThreadIds(rv).sort()).toEqual(["t1", "t2", "t3", "t4"]);
+  });
+  it("sets titles on matching entries without changing the input", () => {
+    const out = withTitles(rv, { t1: "Fix login", t3: "Big refactor", t4: "Held thread", unknown: "x", toString: "nope" });
+    expect(out.overkill.find((t) => t.threadId === "t1")!.threadTitle).toBe("Fix login");
+    expect(out.overkill.find((t) => t.threadId === "t2")!.threadTitle).toBeUndefined();
+    expect(out.underkill[0]!.threadTitle).toBe("Big refactor");
+    expect(out.holds.topOrigins[0]!.threadTitle).toBe("Held thread");
+    expect(rv.overkill.every((t) => t.threadTitle === undefined)).toBe(true);
+  });
+  it("prints the title after the thread id, and the id alone without one", () => {
+    const text = formatReview(withTitles(rv, { t1: "Fix login" }));
+    expect(text).toContain('thread t1 "Fix login"');
+    expect(text).toMatch(/thread t2 xlarge/);
+    expect(formatReview(rv)).not.toContain('"Fix login"');
+  });
+  it("ignores inherited property names as thread ids", () => {
+    const odd = build([r({ tier: "large", output_tokens: 10, thread_id: "constructor" })]);
+    expect(withTitles(odd, {}).overkill[0]!.threadTitle).toBeUndefined();
   });
 });
