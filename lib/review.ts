@@ -248,7 +248,7 @@ export function formatReview(rv: Review): string {
 
   L.push("", "Signal precision (in large/x-large messages)");
   if (!rv.signalPrecision.length) L.push("- none");
-  for (const s of rv.signalPrecision) L.push(`- ${s.signal}: ${s.n} rows (${pct(s.shareOfLargeRows)}), small output ${s.smallOutputShare === null ? "n/a" : pct(s.smallOutputShare)}`);
+  for (const s of rv.signalPrecision) L.push(`- ${s.signal}: ${s.n} ${s.n === 1 ? "message" : "messages"} (${pct(s.shareOfLargeRows)}), small output ${s.smallOutputShare === null ? "n/a" : pct(s.smallOutputShare)}`);
 
   L.push("", "Current policy");
   L.push(`- bands: ${TIERS.map((t) => `${t} ${rv.policy.tiers[t].min}-${rv.policy.tiers[t].max}`).join(", ")}`);
