@@ -544,6 +544,80 @@ describe("CLI review and policy edits", () => {
     const help = await c.run(["help"], {});
     expect(help.stdout).toContain("bb gearshift review");
     expect(help.stdout).toContain("add-pattern");
+    expect(help.stdout).toContain("bb gearshift replay");
+  });
+
+  const insert = (c: { db: Awaited<ReturnType<typeof setup>>["db"] }, thread: string, tier: string, score: number, extra: { output?: number; at?: number } = {}) =>
+    c.db.prepare("INSERT INTO decisions (at, thread_id, provider_id, initiator, attempt, action, reason, tier, score, signals, routed_model, routed_effort, routed_label, output_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(extra.at ?? Date.now() - 1000, thread, "claude-code", "user", "start-turn", "shift", "", tier, score, "[]", "claude-opus-5-5", "xhigh", "Opus 5.5", extra.output ?? null);
+
+  it("replay prints a before and after report, also through review --replay, and takes repeatable --set", async () => {
+    const c = await cli();
+    for (let i = 0; i < 3; i++) insert(c, `thr-${i}`, "small", 4);
+    const rp = await c.run(["replay", "--days", "7", "--set", "tiers.small.max=3", "--set", "routing.holdAboveTokens=30000"], {});
+    expect(rp.exitCode).toBe(0);
+    expect(rp.stdout).toContain("Gearshift replay: last 7 days");
+    expect(rp.stdout).toContain("Under the current policy with: tiers.small.max=3, routing.holdAboveTokens=30000");
+    expect(rp.stdout).toMatch(/- Small: 3 \(100%\) → 0 \(0%\)/);
+    expect(rp.stdout).toMatch(/- Medium: 0 \(0%\) → 3 \(100%\)/);
+    expect(rp.stdout).toContain("What is estimated");
+    const viaReview = await c.run(["review", "--replay", "--days", "7", "--set", "tiers.small.max=3", "--set", "routing.holdAboveTokens=30000"], {});
+    expect(viaReview.stdout).toBe(rp.stdout);
+    const json = JSON.parse((await c.run(["replay", "--json"], {})).stdout!) as { rows: number; period: { days: number }; edits: string[] };
+    expect(json).toMatchObject({ rows: 3, period: { days: 30 }, edits: [] });
+    expect((await c.getPolicy()).overrides).toEqual({}); // a replay never saves anything
+  });
+
+  it("replay rejects a bad --set, a bad --days and --set without --replay", async () => {
+    const c = await cli();
+    insert(c, "thr-1", "small", 4);
+    const err = async (argv: string[]) => { const r = await c.run(argv, {}); expect(r.exitCode).toBe(1); return r.stderr!; };
+    expect(await err(["replay", "--set", "tiers.small.max"])).toMatch(/path=value/);
+    expect(await err(["replay", "--set"])).toMatch(/path=value/);
+    expect(await err(["replay", "--set", "nope.nope=1"])).toMatch(/Unknown path/);
+    expect(await err(["replay", "--set", "routing.holdAboveTokens=lots"])).toMatch(/whole number/);
+    expect(await err(["replay", "--set", "routing.routeNotes=false"])).toMatch(/not replayable/);
+    expect(await err(["replay", "--days", "0"])).toMatch(/--days/);
+    expect(await err(["review", "--set", "tiers.small.max=3"])).toMatch(/--replay/);
+  });
+
+  it("review lists thread titles fetched at report time, ignores failed lookups, and never stores a title", async () => {
+    const get = vi.fn(async ({ threadId }: { threadId: string }) => {
+      if (threadId === "thr-broken") throw new Error("gone");
+      return makeThreadResponse({ id: threadId, title: "Fix the login flow" } as never);
+    });
+    const s = await setup({ threads: { get } });
+    const run = s.harness.inspection.registrations.cli!.run as unknown as (argv: string[], ctx: Record<string, unknown>) => Promise<{ exitCode: number; stdout?: string }>;
+    insert({ db: s.db }, "thr-1", "large", 10, { output: 100 });
+    insert({ db: s.db }, "thr-broken", "xlarge", 13, { output: 100 });
+    const text = await run(["review"], {});
+    expect(text.exitCode).toBe(0);
+    expect(text.stdout).toContain('thread thr-1 "Fix the login flow"');
+    expect(text.stdout).toContain("thread thr-broken xlarge");
+    const json = JSON.parse((await run(["review", "--json"], {})).stdout!) as { overkill: Array<{ threadId: string; threadTitle?: string }> };
+    expect(json.overkill.find((t) => t.threadId === "thr-1")!.threadTitle).toBe("Fix the login flow");
+    expect(json.overkill.find((t) => t.threadId === "thr-broken")!.threadTitle).toBeUndefined();
+    expect(JSON.stringify(s.db.prepare("SELECT * FROM decisions").all())).not.toContain("Fix the login flow");
+  });
+});
+
+describe("held messages", () => {
+  it("record the hold kind, the decision whose gear was inherited, the gear before and the policy stamp", async () => {
+    let used = 1000;
+    const s = await setup({
+      defaults: async () => ({ model: "claude-opus-5-5", reasoningLevel: "xhigh", serviceTier: null }),
+      threads: { events: { list: async () => [{ data: { contextWindowUsage: { usedTokens: used } } }] } },
+    });
+    const live = { thread: { id: T, providerId: PROVIDER, status: "idle" } }; // not a pending thread: it has a gear and a context
+    await s.hook(s.ctx(SMALL, live)); // short context: runs on its own gear, which becomes the origin
+    used = 100_000;
+    await s.hook(s.ctx("rename the variable foo to bar", live));
+    const [first, second] = s.decisions();
+    expect(first).toMatchObject({ action: "shift", hold_kind: null, hold_origin_id: null, current_model: "claude-opus-5-5", current_effort: "xhigh" });
+    expect(second).toMatchObject({ action: "hold", hold_kind: "effort", hold_origin_id: first!.id, current_model: "claude-opus-5-5", current_effort: "xhigh", routed_model: "claude-opus-5-5", context_tokens: 100_000 });
+    expect(second!.routed_effort).not.toBe("xhigh");
+    expect(first!.policy_rev).toMatch(/^[0-9a-f]{8}$/);
+    expect(second!.policy_rev).toBe(first!.policy_rev);
   });
 });
 

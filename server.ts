@@ -8,7 +8,8 @@ import { rpcContract, type PolicyStateDto, type PreviewDto, type ProvidersDto, t
 import { resolveGear, sizeClass, toCatalog, type CatalogModel, type Gear } from "./lib/gears";
 import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
 import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
-import { buildReview, formatReview } from "./lib/review";
+import { applyReplaySets, formatReplay, parseReplaySet, replayDecisions, type ReplaySet } from "./lib/replay";
+import { buildReview, formatReview, reviewThreadIds, withTitles } from "./lib/review";
 import { policyRev } from "./lib/policy-rev";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
@@ -23,6 +24,8 @@ const CATALOG_TTL = 10 * 60_000;
 const ARM_TTL = 15 * 60_000;
 const LOOKUP_MS = 1500; // one budget for every lookup the hook makes
 const PROVIDER_MS = 4000;
+const MAX_TITLES = 40; // thread titles fetched for one review
+const HISTORY_EXTRA_DAYS = 30; // rows read before a report window, so hold origins and thread gears there resolve
 const LINK_WINDOW_MS = 2 * 60_000; // a queue row appears right after the hook returns
 const REATTEMPT_LINK_WINDOW_MS = 30 * 60_000;
 const MAX_RUNS_PER_PARENT = 6;
@@ -684,8 +687,23 @@ export default async function plugin(bb: BbPluginApi) {
     providers: () => providersState(),
   });
 
+  /**
+   * Thread titles for the threads a review lists, fetched at report time. A title comes from what the user wrote, so it is
+   * never stored: it goes into the printed report only. Failures and slow lookups leave a thread without one.
+   */
+  async function threadTitles(threadIds: string[]): Promise<Record<string, string>> {
+    const ids = threadIds.slice(0, MAX_TITLES);
+    const titles: Record<string, string> = {};
+    await Promise.all(ids.map(async (threadId) => {
+      const t = await bounded((async () => bb.sdk.threads.get({ threadId }))(), PROVIDER_MS, null);
+      const title = (t as { title?: unknown } | null)?.title;
+      if (typeof title === "string" && title.trim()) titles[threadId] = title.trim();
+    }));
+    return titles;
+  }
+
   // ---- CLI -------------------------------------------------------------
-  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
+  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]\n  bb gearshift replay [--days N] [--set <path>=<value>]... [--json]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
   const policyUsage = `Policy paths:\n  ${POLICY_PATHS.join("\n  ")}\n  add-pattern / remove-pattern take a scoring class id and a regex`;
   bb.cli.register({
     name: "gearshift",
@@ -694,7 +712,8 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "status", summary: "Show whether Gearshift is on, and the last decision", usage: "bb gearshift status [--thread <id>]" },
       { name: "on", summary: "Turn Gearshift on for a thread", usage: "bb gearshift on --thread <id>" },
       { name: "off", summary: "Turn Gearshift off for a thread", usage: "bb gearshift off --thread <id>" },
-      { name: "review", summary: "Report on the last N days of routing: tiers, holds, manual picks, overkill and underkill, tuning hints", usage: "bb gearshift review [--days N] [--json]" },
+      { name: "review", summary: "Report on the last N days of routing: tiers, holds, manual picks, overkill and underkill, tuning hints", usage: "bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]" },
+      { name: "replay", summary: "Re-run the last N days of routing decisions under the current policy, or with --set edits, and compare tiers, holds and estimated cost", usage: "bb gearshift replay [--days N] [--set <path>=<value>]... [--json]" },
       { name: "policy", summary: "Print the effective routing policy as JSON, or edit one value of it (global, validated like the editor's Save)", usage: "bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]" },
       { name: "spawn", summary: "Spawn a sub-agent thread for a team role on its policy gear and budget", usage: "bb gearshift spawn --role <role> [--thread <id>] <prompt...>" },
       { name: "explain", summary: "Classify text and show the gear it would get", usage: "bb gearshift explain <text...> [--provider <id>]" },
@@ -733,13 +752,34 @@ export default async function plugin(bb: BbPluginApi) {
           store.setPref(threadId, cmd === "on"); changed(threadId);
           return { exitCode: 0, stdout: `Gearshift ${cmd} for ${threadId}` };
         }
-        case "review": {
+        case "review": case "replay": {
           const d = flag("--days");
           const days = d === undefined ? 30 : Number(d);
           if (!Number.isInteger(days) || days < 1 || days > 365) return { exitCode: 1, stderr: "--days must be a whole number from 1 to 365" };
+          const json = argv.includes("--json");
           const now = Date.now();
-          const review = buildReview(store.since(now - days * DAY), compiled.policy, { days, now });
-          return { exitCode: 0, stdout: argv.includes("--json") ? JSON.stringify(review, null, 2) : formatReview(review) };
+          const sets: ReplaySet[] = [];
+          for (let i = 1; i < argv.length; i++) {
+            if (argv[i] !== "--set") continue;
+            const parsed = parseReplaySet(argv[i + 1] ?? "");
+            if ("error" in parsed) return { exitCode: 1, stderr: parsed.error };
+            sets.push(parsed);
+            i++;
+          }
+          const history = store.since(now - (days + HISTORY_EXTRA_DAYS) * DAY);
+          if (cmd === "review" && !argv.includes("--replay")) {
+            if (sets.length) return { exitCode: 1, stderr: "--set needs --replay (or use bb gearshift replay)" };
+            const built = buildReview(history, compiled.policy, { days, now, policyRev: currentRev(), policyChangedAt: rev.changedAt });
+            const review = withTitles(built, await threadTitles(reviewThreadIds(built)));
+            return { exitCode: 0, stdout: json ? JSON.stringify(review, null, 2) : formatReview(review) };
+          }
+          const applied = applyReplaySets(compiled.policy, { ...DEFAULT_POLICY, routing: compiled.policy.routing }, sets);
+          if ("error" in applied) return { exitCode: 1, stderr: applied.error };
+          const providers = [...new Set(history.filter((r) => r.at >= now - days * DAY).map((r) => r.provider_id))];
+          const catalogs: Record<string, CatalogModel[] | null> = {};
+          await Promise.all(providers.map(async (providerId) => { catalogs[providerId] = await bounded(catalogFor({ providerId }), PROVIDER_MS, null); }));
+          const replay = replayDecisions(history, applied.policy, { days, now, catalogs, edits: sets.map((x) => `${x.path}=${x.value}`) });
+          return { exitCode: 0, stdout: json ? JSON.stringify(replay, null, 2) : formatReplay(replay) };
         }
         case "policy": {
           if (argv.length > 1) {
