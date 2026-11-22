@@ -2,14 +2,14 @@
 // Storage holds no message text, so messages are never re-scored: each decision keeps its recorded score, which is
 // re-banded under the replayed tiers. Gears, effort, holds and the hold rule are replayed with the router's own
 // `routeTier`; costs are estimates (see `notes`).
-import { tierForScore } from "./classify";
-import { effortRank, type CatalogModel } from "./gears";
+import { tierForScore, type Confidence } from "./classify";
+import { effortRank, gearWeight, type CatalogModel } from "./gears";
 import { formatEffort, formatTier } from "./labels";
 import { applyPolicyEdit } from "./policy-edit";
-import { TIERS, validatePolicy, type Policy, type Tier } from "./policy";
+import { TIERS, ladderFor, validatePolicy, type Policy, type Tier } from "./policy";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./pricing";
 import { HINT_MIN_ROWS } from "./review";
-import { routeTier, type CurrentGear } from "./router";
+import { biasTier, routeTier, type CurrentGear } from "./router";
 import type { DecisionRow } from "./store";
 
 const DAY = 86_400_000;
@@ -30,6 +30,11 @@ export interface ReplaySide {
   held: number;
   costUsd: number;
 }
+export interface LowerGearTurn {
+  id: number; threadId: string; tierBefore: Tier; tierAfter: Tier; gearBefore: string; gearAfter: string;
+  /** Null when the turn has no recorded cost. */
+  costBefore: number | null; costAfter: number | null;
+}
 export interface Replay {
   period: { days: number; from: string; to: string };
   edits: string[];
@@ -46,6 +51,8 @@ export interface Replay {
   before: ReplaySide;
   after: ReplaySide;
   delta: { costUsd: number; share: number | null };
+  /** Turns that run on a lower gear after the replay than they recorded (lower weight, or the same model on a lower effort). */
+  lowerGear: { n: number; costBefore: number; costAfter: number; top: LowerGearTurn[] };
   changes: { tierMoves: number; modelChanges: number; effortLower: number; effortHigher: number; holdKinds: Record<string, number> };
   /** Rows whose effort changed with no data to estimate the effect on output tokens (priced with unchanged output). */
   effortUnestimated: number;
@@ -64,8 +71,8 @@ const BOOL_TRUE = /^(true|on|yes|1)$/i;
 const BOOL_FALSE = /^(false|off|no|0)$/i;
 
 /**
- * Apply `--set path=value` edits to a policy. `routing.holdAboveTokens` and `routing.holdEffortFollowsMessage`
- * (plugin settings, not policy paths) are accepted here so a replay can try them; every other path goes
+ * Apply `--set path=value` edits to a policy. `routing.holdAboveTokens`, `routing.holdEffortFollowsMessage` and
+ * `routing.downshiftBias` (plugin settings, not policy paths) are accepted here so a replay can try them; every other path goes
  * through the same validation as `bb gearshift policy set`.
  */
 export function applyReplaySets(policy: Policy, defaults: Policy, sets: ReplaySet[]): { policy: Policy } | { error: string } {
@@ -83,7 +90,12 @@ export function applyReplaySets(policy: Policy, defaults: Policy, sets: ReplaySe
       p = { ...p, routing: { ...p.routing, holdEffortFollowsMessage: BOOL_TRUE.test(v) } };
       continue;
     }
-    if (s.path.startsWith("routing.")) return { error: `Replay can set routing.holdAboveTokens and routing.holdEffortFollowsMessage; "${s.path}" is not replayable` };
+    if (s.path === "routing.downshiftBias") {
+      if (!BOOL_TRUE.test(v) && !BOOL_FALSE.test(v)) return { error: `routing.downshiftBias takes true or false, got "${s.value}"` };
+      p = { ...p, routing: { ...p.routing, downshiftBias: BOOL_TRUE.test(v) } };
+      continue;
+    }
+    if (s.path.startsWith("routing.")) return { error: `Replay can set routing.holdAboveTokens, routing.holdEffortFollowsMessage and routing.downshiftBias; "${s.path}" is not replayable` };
     const r = applyPolicyEdit(p, defaults, { op: "set", path: s.path, value: s.value });
     if ("error" in r) return { error: r.error };
     p = r.policy;
@@ -129,6 +141,7 @@ export function replayDecisions(rows: DecisionRow[], policy: Policy, opts: Repla
   type GearAcc = Map<string, { n: number; costUsd: number }>;
   const beforeG: GearAcc = new Map(), afterG: GearAcc = new Map();
   let heldBefore = 0, heldAfter = 0, costBefore = 0, costAfter = 0;
+  const lower = { n: 0, costBefore: 0, costAfter: 0, turns: [] as LowerGearTurn[] };
   const bump = (m: GearAcc, k: string, c: number | null) => { const e = m.get(k) ?? { n: 0, costUsd: 0 }; e.n++; e.costUsd += c ?? 0; m.set(k, e); };
   /** The replayed gear each thread is on (what the next message's hold rule sees). */
   const threadGear = new Map<string, CurrentGear>();
@@ -149,7 +162,10 @@ export function replayDecisions(rows: DecisionRow[], policy: Policy, opts: Repla
     }
     total++;
     const oldTier = r.tier as Tier;
-    const newTier = r.score === null ? oldTier : tierForScore(r.score, policy.tiers);
+    // The recorded tier may already carry the bias: re-derive from the score (the bias is re-applied below, never stacked).
+    const rescored = r.score === null ? oldTier : tierForScore(r.score, policy.tiers);
+    const conf = r.confidence === "low" || r.confidence === "medium" || r.confidence === "high" ? (r.confidence as Confidence) : null;
+    const newTier = biasTier(rescored, r.score, conf, policy).tier;
     beforeT.set(oldTier, (beforeT.get(oldTier) ?? 0) + 1);
     afterT.set(newTier, (afterT.get(newTier) ?? 0) + 1);
     if (newTier !== oldTier) changes.tierMoves++;
@@ -216,6 +232,19 @@ export function replayDecisions(rows: DecisionRow[], policy: Policy, opts: Repla
       }
     }
     if (r.cost_usd !== null) costAfter += after ?? r.cost_usd;
+    if (next && recorded && cat && cat.length && !sameGear(next, recorded)) {
+      const ladder = ladderFor(policy, r.provider_id);
+      if (gearWeight(next.model, next.effort, ladder, cat) < gearWeight(recorded.model, recorded.effort, ladder, cat)) {
+        lower.n++;
+        const cb = r.cost_usd, ca = r.cost_usd === null ? null : after ?? r.cost_usd;
+        lower.costBefore += cb ?? 0; lower.costAfter += ca ?? 0;
+        lower.turns.push({
+          id: r.id, threadId: r.thread_id, tierBefore: oldTier, tierAfter: newTier,
+          gearBefore: gearText(label(recorded.model), recorded.effort), gearAfter: gearText(label(next.model), next.effort ?? null),
+          costBefore: cb === null ? null : round(cb), costAfter: ca === null ? null : round(ca),
+        });
+      }
+    }
     if (next) bump(afterG, gearText(label(next.model), next.effort ?? null), r.cost_usd === null ? null : after ?? r.cost_usd);
     if (next) threadGear.set(r.thread_id, next);
   }
@@ -226,7 +255,7 @@ export function replayDecisions(rows: DecisionRow[], policy: Policy, opts: Repla
     held, costUsd: round(cost),
   });
   const notes = [
-    "Messages are not stored, so nothing is re-scored: each decision keeps its recorded score, re-banded under the replayed tiers. Changes to scoring classes, patterns or other scoring weights cannot be replayed.",
+    "Messages are not stored, so nothing is re-scored: each decision keeps its recorded score, re-banded under the replayed tiers, and the downshift bias is replayed from that score and the stored confidence (never stacked on a tier that already carried it). Changes to scoring classes, patterns or other scoring weights cannot be replayed.",
     "Costs are estimates: each turn keeps its recorded token usage on the new gear. A model change prices the turn's cached context as cache writes (a switch) or reads (no switch).",
     `Effort changes scale output tokens by the window's own average output per model and effort when both have at least ${HINT_MIN_ROWS} turns; otherwise output is left unchanged.`,
     "Messages that name a model, hand-picked, skipped and off messages are not re-routed; turns without usage carry no cost.",
@@ -237,6 +266,10 @@ export function replayDecisions(rows: DecisionRow[], policy: Policy, opts: Repla
     before: side(beforeT, beforeG, heldBefore, costBefore),
     after: side(afterT, afterG, heldAfter, costAfter),
     delta: { costUsd: round(costAfter - costBefore), share: costBefore > 0 ? round((costAfter - costBefore) / costBefore, 3) : null },
+    lowerGear: {
+      n: lower.n, costBefore: round(lower.costBefore), costAfter: round(lower.costAfter),
+      top: lower.turns.sort((a, b) => ((b.costBefore ?? 0) - (b.costAfter ?? 0)) - ((a.costBefore ?? 0) - (a.costAfter ?? 0)) || a.id - b.id).slice(0, 10),
+    },
     changes, effortUnestimated, notes,
   };
 }
@@ -264,6 +297,12 @@ export function formatReplay(rp: Replay): string {
   L.push(`- changed: ${rp.changes.tierMoves} tier moves, ${rp.changes.modelChanges} model changes, ${rp.changes.effortLower} lower effort, ${rp.changes.effortHigher} higher effort`);
   if (rp.effortUnestimated) L.push(`- ${rp.effortUnestimated} effort changes had too little data to estimate output; priced with unchanged output`);
   if (rp.unpriced) L.push(`- ${rp.unpriced} turns moved to a model with no price; they keep their recorded cost`);
+  if (rp.lowerGear.n) {
+    L.push("", `Lower gear: ${rp.lowerGear.n} turns run on a lower gear than they recorded, ${usd(rp.lowerGear.costBefore)} → ${usd(rp.lowerGear.costAfter)}`);
+    const c = (n: number | null) => (n === null ? "no cost" : usd(n));
+    for (const t of rp.lowerGear.top) L.push(`- #${t.id} ${t.threadId}: ${formatTier(t.tierBefore)} → ${formatTier(t.tierAfter)}, ${t.gearBefore} → ${t.gearAfter}, ${c(t.costBefore)} → ${c(t.costAfter)}`);
+    if (rp.lowerGear.n > rp.lowerGear.top.length) L.push(`- …and ${rp.lowerGear.n - rp.lowerGear.top.length} more`);
+  } else L.push("", "Lower gear: no turn runs on a lower gear than it recorded");
   L.push("", "Gears after (by cost)");
   for (const g of rp.after.gears.slice(0, 10)) L.push(`- ${g.gear}: ${g.n} messages, ${usd(g.costUsd)}`);
   L.push("", "What is estimated");

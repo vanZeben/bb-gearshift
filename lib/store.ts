@@ -39,6 +39,8 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE decisions ADD COLUMN current_model TEXT`,
   `ALTER TABLE decisions ADD COLUMN current_effort TEXT`,
   `ALTER TABLE decisions ADD COLUMN policy_rev TEXT`,
+  // The tier the score alone put the message in, before the downshift bias moved it one lower (tier holds the routed tier).
+  `ALTER TABLE decisions ADD COLUMN scored_tier TEXT`,
 ];
 
 export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
@@ -59,6 +61,7 @@ export interface DecisionRow {
   cache_write_tokens: number | null; cost_usd: number | null; baseline_cost_usd: number | null; signal_roles?: string;
   /** Rows written before these columns existed read them as null (or undefined in hand-built rows). */
   hold_kind?: string | null; hold_origin_id?: number | null; current_model?: string | null; current_effort?: string | null; policy_rev?: string | null;
+  scored_tier?: string | null;
 }
 export type NewDecision = Omit<DecisionRow, "id" | "routed_service_tier" | "latency_ms" | "turn_id" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "cost_usd" | "baseline_cost_usd" | "queued_message_id"> &
   Partial<Pick<DecisionRow, "queued_message_id">> & { routed_service_tier?: string | null };

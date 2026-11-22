@@ -59,6 +59,7 @@ export default async function plugin(bb: BbPluginApi) {
     routeAgentMessages: { type: "boolean", label: "Route messages from other agents", description: "Also pick a model for messages that other threads or agents send into a thread.", default: true },
     holdAboveTokens: { type: "number", label: "Don't downshift threads above this many context tokens (0 = never hold)", description: "Switching to a cheaper model on a big context re-reads it uncached, so Gearshift keeps the current model instead.", default: 60000, experimental_schema: z.number().int().min(0) },
     holdEffortFollowsMessage: { type: "boolean", label: "Lower the effort of held messages to their own size", description: "On a long thread Gearshift keeps the model (switching would re-read the context uncached), but a smaller message still gets its own lower effort. Claude Code sends the effort inside the conversation, so the cache stays valid on models that support per-turn effort.", default: true },
+    downshiftBias: { type: "boolean", label: "Lean to the lower tier on borderline messages", description: "A message at the very bottom of its size band, or with no clear signal, runs one tier lower. Never higher, and never below trivial.", default: true },
     routeNotes: { type: "boolean", label: "Add a team note to medium and larger messages", description: "Tells the agent which sub-agent roles to spawn (gearshift_spawn), on which models, with what budgets. Invisible in the chat.", default: true },
     retentionDays: { type: "number", label: "Days of history kept", description: "Routing decisions older than this are deleted.", default: 90, experimental_schema: z.number().int().min(1).max(3650) },
   });
@@ -87,6 +88,7 @@ export default async function plugin(bb: BbPluginApi) {
     holdAboveTokens: c.holdAboveTokens ?? DEFAULT_POLICY.routing.holdAboveTokens,
     routeNotes: c.routeNotes ?? DEFAULT_POLICY.routing.routeNotes,
     holdEffortFollowsMessage: c.holdEffortFollowsMessage ?? DEFAULT_POLICY.routing.holdEffortFollowsMessage,
+    downshiftBias: c.downshiftBias ?? DEFAULT_POLICY.routing.downshiftBias,
   });
   /** Overrides on top of the defaults, with the routing section taken from the settings. Null when it does not compile. */
   const build = (o: PolicyOverrides): { compiled: CompiledPolicy; errors: PolicyError[] } => {
@@ -559,7 +561,7 @@ export default async function plugin(bb: BbPluginApi) {
     const c = d.classification;
     const row: NewDecision = {
       at, thread_id: ctx.thread.id, project_id: ctx.thread.projectId, provider_id: ctx.thread.providerId, initiator: ctx.initiator,
-      attempt: ctx.attempt, action: d.action, reason: d.reason, tier: d.tier, score: d.tier ? c.score : null, confidence: d.tier ? c.confidence : null,
+      attempt: ctx.attempt, action: d.action, reason: d.reason, tier: d.tier, score: d.tier ? c.score : null, confidence: d.tier ? c.confidence : null, scored_tier: d.scoredTier,
       signals: JSON.stringify(c.signals), signal_roles: JSON.stringify(d.tier ? teamRoles(compiled.policy, d.tier, c.contributions.map((x) => x.id)).slice(compiled.policy.teams[d.tier].roles.length) : []), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
       requested_model: ctx.requestedExecution.model, requested_effort: ctx.requestedExecution.reasoningLevel,
       routed_model: d.gear?.model ?? null, routed_effort: d.gear?.effort ?? null, routed_label: d.gear?.label ?? null, routed_service_tier: d.gear?.serviceTier ?? null,
