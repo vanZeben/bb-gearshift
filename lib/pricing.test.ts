@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { costUsd, priceFor, tierMultiplier } from "./pricing";
+import { costUsd, priceFor, ratesAt, tierMultiplier } from "./pricing";
 import { DEFAULT_POLICY } from "./policy";
 
 const u = { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000 };
@@ -36,5 +36,17 @@ describe("costUsd", () => {
     expect(tierMultiplier(DEFAULT_POLICY, "fast")).toBe(2);
     expect(tierMultiplier(DEFAULT_POLICY, "default")).toBe(1);
     expect(tierMultiplier(DEFAULT_POLICY, null)).toBe(1);
+  });
+});
+
+describe("long-context rates", () => {
+  const haiku = { input: 0.1, output: 0.5, longContext: { aboveTokens: 100_000, input: 0.5, output: 2.5 } };
+  it("apply above the band, by prompt size", () => {
+    expect(ratesAt(haiku, 100_000)).toEqual({ input: 0.1, output: 0.5, cacheRead: 0.1 * 0.1, cacheWrite: 0.1 * 1.25 });
+    expect(ratesAt(haiku, 100_001)).toEqual({ input: 0.5, output: 2.5, cacheRead: 0.5 * 0.1, cacheWrite: 0.5 * 1.25 });
+  });
+  it("price a whole turn at the long-context rates", () => {
+    const u = { inputTokens: 1_000, outputTokens: 1_000_000, cacheReadTokens: 200_000, cacheWriteTokens: 0 };
+    expect(costUsd(u, haiku)).toBeCloseTo((1_000 * 0.5 + 1_000_000 * 2.5 + 200_000 * 0.05) / 1e6, 6);
   });
 });

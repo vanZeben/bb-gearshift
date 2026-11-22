@@ -32,6 +32,13 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE runs ADD COLUMN model_label TEXT`,
   // Roles a decision's signals added to its team (role names only, never message text).
   `ALTER TABLE decisions ADD COLUMN signal_roles TEXT NOT NULL DEFAULT '[]'`,
+  // How a hold treated the message (gear | effort | continuation | downshift), the decision whose gear it inherited,
+  // the gear the thread was on before the message, and a short hash of the policy the decision was made under.
+  `ALTER TABLE decisions ADD COLUMN hold_kind TEXT`,
+  `ALTER TABLE decisions ADD COLUMN hold_origin_id INTEGER`,
+  `ALTER TABLE decisions ADD COLUMN current_model TEXT`,
+  `ALTER TABLE decisions ADD COLUMN current_effort TEXT`,
+  `ALTER TABLE decisions ADD COLUMN policy_rev TEXT`,
 ];
 
 export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
@@ -50,6 +57,8 @@ export interface DecisionRow {
   context_tokens: number | null; latency_ms: number | null; queued_message_id: string | null; amend_status: string | null;
   turn_id: string | null; input_tokens: number | null; output_tokens: number | null; cache_read_tokens: number | null;
   cache_write_tokens: number | null; cost_usd: number | null; baseline_cost_usd: number | null; signal_roles?: string;
+  /** Rows written before these columns existed read them as null (or undefined in hand-built rows). */
+  hold_kind?: string | null; hold_origin_id?: number | null; current_model?: string | null; current_effort?: string | null; policy_rev?: string | null;
 }
 export type NewDecision = Omit<DecisionRow, "id" | "routed_service_tier" | "latency_ms" | "turn_id" | "input_tokens" | "output_tokens" | "cache_read_tokens" | "cache_write_tokens" | "cost_usd" | "baseline_cost_usd" | "queued_message_id"> &
   Partial<Pick<DecisionRow, "queued_message_id">> & { routed_service_tier?: string | null };
@@ -99,6 +108,16 @@ export class Store {
 
   get(id: number): DecisionRow | undefined {
     return this.db.prepare(`SELECT * FROM decisions WHERE id=?`).get(id) as DecisionRow | undefined;
+  }
+
+  /**
+   * The decision whose gear a hold on this thread inherits: the newest routed or hand-picked start-turn decision;
+   * when that was itself a hold, the decision it inherited from.
+   */
+  holdOrigin(threadId: string): number | null {
+    const r = this.db.prepare(`SELECT id, action, hold_origin_id FROM decisions WHERE thread_id=? AND attempt='start-turn' AND action IN ('shift','keep','hold','manual') ORDER BY id DESC LIMIT 1`).get(threadId) as { id: number; action: string; hold_origin_id: number | null } | undefined;
+    if (!r) return null;
+    return r.action === "hold" ? r.hold_origin_id ?? r.id : r.id;
   }
 
   lastForThread(threadId: string): DecisionRow | undefined {

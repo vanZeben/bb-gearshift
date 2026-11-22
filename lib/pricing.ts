@@ -23,14 +23,19 @@ export function priceFor(model: string, prices: Policy["prices"]): Price | null 
   return best === null ? null : prices[best]!;
 }
 
+/** The rates that apply to a prompt of this many tokens (input + cache reads + cache writes). */
+export function ratesAt(price: Price, promptTokens: number): Required<Pick<Price, "input" | "output" | "cacheRead" | "cacheWrite">> {
+  const p = price.longContext && promptTokens > price.longContext.aboveTokens ? price.longContext : price;
+  return { input: p.input, output: p.output, cacheRead: p.cacheRead ?? p.input * 0.1, cacheWrite: p.cacheWrite ?? p.input * 1.25 };
+}
+
 /** Cost of a turn. `serviceTier` applies the policy's multiplier (missing tier = 1). */
 export function costUsd(usage: Usage, price: Price | null, multiplier = 1): number | null {
   if (!price) return null;
-  const cacheRead = price.cacheRead ?? price.input * 0.1;
-  const cacheWrite = price.cacheWrite ?? price.input * 1.25;
+  const { input, output, cacheRead, cacheWrite } = ratesAt(price, usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens);
   const dollars =
-    usage.inputTokens * price.input +
-    usage.outputTokens * price.output +
+    usage.inputTokens * input +
+    usage.outputTokens * output +
     usage.cacheReadTokens * cacheRead +
     usage.cacheWriteTokens * cacheWrite;
   return (dollars / 1_000_000) * multiplier;

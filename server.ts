@@ -9,6 +9,7 @@ import { resolveGear, sizeClass, toCatalog, type CatalogModel, type Gear } from 
 import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
 import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
 import { buildReview, formatReview } from "./lib/review";
+import { policyRev } from "./lib/policy-rev";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
@@ -28,6 +29,8 @@ const MAX_RUNS_PER_PARENT = 6;
 const MAX_RUNS_GLOBAL = 20;
 const STALE_RUN_MS = 6 * 3_600_000; // an open run this old never reported back
 const POLICY_KEY = "policy-overrides";
+/** { rev, changedAt }: the effective policy's fingerprint and when it last changed (for the review's policy note). */
+const POLICY_REV_KEY = "policy-rev";
 /** Not configurable from the policy editor: prices stay internal, routing switches are plain settings. */
 const NOT_OVERRIDABLE = ["prices", "serviceTierMultipliers", "baselineModel", "routing"] as const;
 type QueuedRow = MessageDispatchHookContext["queuedMessages"][number];
@@ -52,6 +55,7 @@ export default async function plugin(bb: BbPluginApi) {
     respectManualPicks: { type: "boolean", label: "A model picked by hand wins", description: "When you choose a model in the composer, Gearshift leaves that message alone.", default: true },
     routeAgentMessages: { type: "boolean", label: "Route messages from other agents", description: "Also pick a model for messages that other threads or agents send into a thread.", default: true },
     holdAboveTokens: { type: "number", label: "Don't downshift threads above this many context tokens (0 = never hold)", description: "Switching to a cheaper model on a big context re-reads it uncached, so Gearshift keeps the current model instead.", default: 60000, experimental_schema: z.number().int().min(0) },
+    holdEffortFollowsMessage: { type: "boolean", label: "Lower the effort of held messages to their own size", description: "On a long thread Gearshift keeps the model (switching would re-read the context uncached), but a smaller message still gets its own lower effort. Claude Code sends the effort inside the conversation, so the cache stays valid on models that support per-turn effort.", default: true },
     routeNotes: { type: "boolean", label: "Add a team note to medium and larger messages", description: "Tells the agent which sub-agent roles to spawn (gearshift_spawn), on which models, with what budgets. Invisible in the chat.", default: true },
     retentionDays: { type: "number", label: "Days of history kept", description: "Routing decisions older than this are deleted.", default: 90, experimental_schema: z.number().int().min(1).max(3650) },
   });
@@ -79,6 +83,7 @@ export default async function plugin(bb: BbPluginApi) {
     routeAgentMessages: c.routeAgentMessages ?? DEFAULT_POLICY.routing.routeAgentMessages,
     holdAboveTokens: c.holdAboveTokens ?? DEFAULT_POLICY.routing.holdAboveTokens,
     routeNotes: c.routeNotes ?? DEFAULT_POLICY.routing.routeNotes,
+    holdEffortFollowsMessage: c.holdEffortFollowsMessage ?? DEFAULT_POLICY.routing.holdEffortFollowsMessage,
   });
   /** Overrides on top of the defaults, with the routing section taken from the settings. Null when it does not compile. */
   const build = (o: PolicyOverrides): { compiled: CompiledPolicy; errors: PolicyError[] } => {
@@ -86,9 +91,25 @@ export default async function plugin(bb: BbPluginApi) {
     try { return { compiled: compilePolicy({ ...effective, routing: routingFromSettings(cfg) }), errors }; }
     catch (e) { return { compiled: compilePolicy({ ...DEFAULT_POLICY, routing: routingFromSettings(cfg) }), errors: [...errors, { path: "policy", message: String(e) }] }; }
   };
+  /** The effective policy's fingerprint (stamped on every decision) and when it last changed. */
+  let rev = { rev: "", changedAt: null as number | null };
+  let stamping = Promise.resolve();
+  const currentRev = () => rev.rev;
+  /** Remember when the policy last changed: a saved edit, a setting, or new defaults after an update. */
+  const stampPolicy = (next: string, prevChangedAt: number | null) => async () => {
+    try {
+      const saved = await bb.storage.kv.get<{ rev?: string; changedAt?: number | null }>(POLICY_REV_KEY);
+      if (saved?.rev === next) { if (rev.rev === next) rev.changedAt = saved.changedAt ?? null; return; }
+      const changedAt = saved?.rev ? Date.now() : prevChangedAt; // first run ever: unknown, not "just now"
+      if (rev.rev === next) rev.changedAt = changedAt;
+      await bb.storage.kv.set(POLICY_REV_KEY, { rev: next, changedAt });
+    } catch (e) { bb.log.warn(`could not stamp policy: ${String(e)}`); }
+  };
   const rebuild = () => {
     const r = build(overrides);
     compiled = r.compiled; policyErrors = r.errors;
+    const next = policyRev(compiled.policy);
+    if (next !== rev.rev) { const prev = rev.changedAt; rev = { rev: next, changedAt: prev }; stamping = stamping.then(stampPolicy(next, prev)); }
     if (policyErrors.length) bb.log.warn(`invalid saved policy, routing with defaults: ${policyErrors[0]!.path}: ${policyErrors[0]!.message}`);
   };
   try {
@@ -511,7 +532,7 @@ export default async function plugin(bb: BbPluginApi) {
       const wantsNote = compiled.policy.routing.routeNotes && ctx.attempt === "start-turn" && (ctx.initiator === "user" || ctx.initiator === "agent")
         && noteWorthy(d.tier) && ["shift", "keep", "hold"].includes(d.action); // a manual pick is never held just for a note
       const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, d.classification.contributions.map((c) => c.id), providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), Math.max(0, deadline - Date.now()), null) : null;
-      const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0, text);
+      const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0, text, current);
       if (queued.length) store.linkQueued(id, threadId, queued.map((r) => r.id));
       changed(threadId);
       const gear = d.needsAmend ? d.gear : null;
@@ -531,7 +552,7 @@ export default async function plugin(bb: BbPluginApi) {
     }
   });
 
-  function record(ctx: MessageDispatchHookContext, d: Decision, ctxTokens: number | null, baseline: string | null, at: number, text: string): number {
+  function record(ctx: MessageDispatchHookContext, d: Decision, ctxTokens: number | null, baseline: string | null, at: number, text: string, current: { model: string; effort: string | null } | null): number {
     const c = d.classification;
     const row: NewDecision = {
       at, thread_id: ctx.thread.id, project_id: ctx.thread.projectId, provider_id: ctx.thread.providerId, initiator: ctx.initiator,
@@ -540,6 +561,8 @@ export default async function plugin(bb: BbPluginApi) {
       requested_model: ctx.requestedExecution.model, requested_effort: ctx.requestedExecution.reasoningLevel,
       routed_model: d.gear?.model ?? null, routed_effort: d.gear?.effort ?? null, routed_label: d.gear?.label ?? null, routed_service_tier: d.gear?.serviceTier ?? null,
       baseline_model: baseline, context_tokens: ctxTokens, amend_status: null,
+      hold_kind: d.holdKind, hold_origin_id: d.action === "hold" ? store.holdOrigin(ctx.thread.id) : null,
+      current_model: current?.model ?? null, current_effort: current?.effort ?? null, policy_rev: currentRev(),
     };
     return store.insertDecision(row);
   }
