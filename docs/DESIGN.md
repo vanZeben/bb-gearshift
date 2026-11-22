@@ -82,19 +82,25 @@ Facts verified against bb 0.50.1 (SDK 0.6.157):
 | 5 | no catalog for the provider | `skip` | Model list unavailable for {provider} |
 | 6 | the text names a model family that resolves ("use opus") | `shift`/`keep` | You asked for {label} |
 | 7 | `modelSource === "explicit"` and `policy.routing.respectManualPicks` | `manual` | Model picked by hand |
-| 8 | continuation ("go ahead", "continue") and the thread has a current gear | `hold` (or `keep` if requested already equals it) | Continuing on {label} |
+| 8 | continuation ("go ahead", "continue") and the thread has a current gear | `hold` (or `keep` if requested already equals it), hold kind `continuation` | Continuing on {label} |
 | 9 | the tier's gear does not resolve | `skip` | No model for {tier} on {provider} |
-| 10 | thread context ≥ `policy.routing.holdAboveTokens` and the tier's gear is *lower* than the current gear | `hold` | Holding {label}: a {N}k-token context would be re-read uncached |
+| 10a | thread context ≥ `policy.routing.holdAboveTokens`, the tier's gear is *lower* than the current gear, the tier is trivial or small, and `switchSaves` (one turn on the new model, context written to its cache, costs less than staying, context read from cache; 2,000 output tokens each; list prices) | `shift`, hold kind `downshift` | {Tier} task … → {label}: cheaper than holding {held} even with the {N}k-token context re-read uncached |
+| 10b | as 10, `routing.holdEffortFollowsMessage` on, and the tier's effort (clamped to the current model; large/xlarge floored at medium) is lower than the current effort | `hold` on the current model at the tier's effort, hold kind `effort` | Holding {label}, effort {from} → {to} for a {tier} task: a {N}k-token context would be re-read uncached on another model |
+| 10c | as 10 otherwise | `hold` on the current gear, hold kind `gear` | Holding {label}: a {N}k-token context would be re-read uncached |
 | 11 | tier gear equals the requested model and effort | `keep` | {Tier} task ({signals}) → {label} · {effort} |
 | 12 | otherwise | `shift` | same as 11 |
 
 `hold` and `keep` with a target equal to the request need no amend. `shift` and a `hold`
 whose target differs from the request (the composer asked for something else) amend.
 
-Why rule 10: prompt caches are scoped to one model, and changing the effort mid-conversation
-also invalidates the message cache on Anthropic models. Dropping a 200k-token thread to a
-cheaper model for a "thanks" re-reads the whole context uncached, which costs more than the
-answer saves. Upshifts are always allowed: quality first.
+Why rule 10: prompt caches are scoped to one model. Dropping a 200k-token thread to a
+cheaper model for a "thanks" usually re-reads the whole context uncached, which costs more than
+the answer saves, so the model is held unless the price check (10a) says otherwise. The effort
+is not held (10b): Claude Code sends effort per turn inside the conversation on the models
+that support it, so an effort change keeps the cache; where it can't, a top-level effort change
+rewrites the cached conversation, and `holdEffortFollowsMessage` off restores whole-gear holds.
+A hold never raises the effort. Upshifts are always allowed: quality first. Rules 10 to 12 are
+`routeTier` in `lib/router.ts`, which the replay also uses.
 
 "Current gear" = the thread's last executed model and effort
 (`bb.sdk.threads.defaultExecutionOptions({ threadId })`), or null for a thread with no turns
@@ -127,6 +133,7 @@ knob is a form control.
 | `respectManualPicks` | boolean | true | A model picked by hand wins |
 | `routeAgentMessages` | boolean | true | Route messages from other agents |
 | `holdAboveTokens` | number (int ≥ 0) | 60000 | Don't downshift threads above this many context tokens (0 = never hold) |
+| `holdEffortFollowsMessage` | boolean | true | Lower the effort of held messages to their own size |
 | `retentionDays` | number (int 1–3650) | 90 | Days of history kept |
 
 The effective policy's `routing` section is built from these settings at runtime.
@@ -188,6 +195,7 @@ export interface Policy {
     respectManualPicks: boolean;  // a model picked by hand in the composer wins for that message
     routeAgentMessages: boolean;  // route messages other agents send into a thread
     holdAboveTokens: number;      // never downshift at or above this context size; 0 = never hold
+    holdEffortFollowsMessage: boolean; // under a hold, the effort drops to the message's tier (never rises)
   };
   scoring: {
     trivial: { maxChars: number; patterns: string[]; leading: string[] }; // score 0, high confidence; `leading` only when no class or question matches
@@ -311,7 +319,7 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
   },
   "serviceTierMultipliers": { "fast": 2 },
   "baselineModel": null,
-  "routing": { "defaultOn": true, "respectManualPicks": true, "routeAgentMessages": true, "holdAboveTokens": 60000 },
+  "routing": { "defaultOn": true, "respectManualPicks": true, "routeAgentMessages": true, "holdAboveTokens": 60000, "holdEffortFollowsMessage": true },
   "scoring": {
     "trivial": {
       "maxChars": 60,
@@ -416,10 +424,24 @@ resolved model lists that tier in `supportedServiceTiers`.
 
 ## Review and policy edits (`lib/review.ts`, `lib/policy-edit.ts`, pure)
 
-`buildReview(rows, policy, { days, now })` summarizes stored decisions in the window: counts
+`buildReview(rows, policy, { days, now, policyRev, policyChangedAt })` summarizes stored decisions in the window: counts
 by action, per-tier share, score and output-token percentiles, cost per gear, the cost of
-holds, hand-picked models, overkill and underkill candidates, per-signal precision and hints
-with named thresholds. `formatReview` renders it as text. It reads only stored metadata.
+holds by hold kind and the origin turns that cost the most, hand-picked models, overkill and
+underkill candidates (each marked held or not, with the inherited gear and origin), per-signal
+precision, a policy-change note and hints with named thresholds. `formatReview` renders it as
+text. It reads only stored metadata; thread titles are fetched at report time
+(`reviewThreadIds`, `withTitles`) and never stored.
+
+`replayDecisions(rows, policy, { days, catalogs })` (`lib/replay.ts`) re-runs the window under
+a policy: the current one, or one with `--set path=value` edits (`applyReplaySets`, the same
+validation as `policy set`, plus `routing.holdAboveTokens` and
+`routing.holdEffortFollowsMessage`). With no message text there is no re-scoring: each row's
+recorded score is re-banded under the replayed tiers, then `routeTier` picks the gear, with
+the hold rule applied against the replayed gear of the thread. Costs reuse each turn's token
+usage on the new gear; a replayed model switch prices cached context as cache writes; an
+effort change scales output by the window's own mean output per model and effort when both
+have five or more turns. `formatReplay` prints before/after tier shares, cost and holds, and
+lists what is estimated.
 `applyPolicyEdit(effective, defaults, edit)` applies one `set`, `unset`, `add-pattern` or
 `remove-pattern` edit to the effective policy, or returns an error; the CLI then diffs against
 the defaults and saves through the same validation as the `savePolicy` RPC. The analytics
@@ -485,7 +507,19 @@ CREATE TABLE thread_prefs (thread_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
 ALTER TABLE decisions ADD COLUMN routed_service_tier TEXT;
 CREATE TABLE queued_links (queued_message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, decision_id INTEGER NOT NULL);
 CREATE INDEX queued_links_decision ON queued_links(decision_id);
+-- (runs table and signal_roles: see Sub-agents)
+ALTER TABLE decisions ADD COLUMN hold_kind TEXT;        -- gear | effort | continuation | downshift | null
+ALTER TABLE decisions ADD COLUMN hold_origin_id INTEGER; -- hold rows: the decision whose gear was inherited
+ALTER TABLE decisions ADD COLUMN current_model TEXT;    -- the thread's gear before this message
+ALTER TABLE decisions ADD COLUMN current_effort TEXT;
+ALTER TABLE decisions ADD COLUMN policy_rev TEXT;       -- policyRev(effective policy): 8 hex chars
 ```
+
+`hold_origin_id` is the newest routed or hand-picked start-turn decision of the thread, or that
+decision's own origin when it was a hold. `policy_rev` (`lib/policy-rev.ts`, FNV-1a over the
+sorted policy JSON) lets the review count decisions made under an earlier policy; the plugin
+keeps `{ rev, changedAt }` in plugin storage (`policy-rev`) and updates `changedAt` whenever the
+effective policy changes (an edit, a setting, or new defaults after an update).
 
 One message = one row: every inline first attempt inserts, and re-attempts find their row
 through `queued_links` (filled from `message.queued`). The fingerprint is only used to
