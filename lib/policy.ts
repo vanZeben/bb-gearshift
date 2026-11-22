@@ -34,6 +34,8 @@ export interface Price {
   output: number;
   cacheRead?: number; // default input x 0.1
   cacheWrite?: number; // default input x 1.25
+  /** Higher rates for a prompt (input + cache reads + cache writes) above `aboveTokens`. */
+  longContext?: { aboveTokens: number; input: number; output: number; cacheRead?: number; cacheWrite?: number };
 }
 
 export interface ScoreClass {
@@ -52,7 +54,11 @@ export interface Policy {
   prices: Record<string, Price>;
   serviceTierMultipliers: Record<string, number>;
   baselineModel: string | null;
-  routing: { defaultOn: boolean; respectManualPicks: boolean; routeAgentMessages: boolean; holdAboveTokens: number; routeNotes: boolean };
+  routing: {
+    defaultOn: boolean; respectManualPicks: boolean; routeAgentMessages: boolean; holdAboveTokens: number; routeNotes: boolean;
+    /** Under a hold, keep the model but let the effort drop to the message's own tier (never raise it). */
+    holdEffortFollowsMessage: boolean;
+  };
   teams: Record<Tier, TeamSpec>;
   roles: Record<string, RoleSpec>;
   /** Scoring class id -> roles that join the tier's team when that class contributed to the score. */
@@ -80,7 +86,8 @@ const tierEnum = z.enum(TIERS);
 const gearSpecSchema = z.object({ model: z.string().min(1), effort: z.string().optional(), serviceTier: z.string().optional() });
 const roleGearSchema = gearSpecSchema.extend({ providerId: z.string().min(1).optional(), effortMediumUp: z.string().optional() });
 const budgetSchema = z.object({ trivial: nonNeg, small: nonNeg, medium: nonNeg, large: nonNeg, xlarge: nonNeg });
-const priceSchema = z.object({ input: nonNeg, output: nonNeg, cacheRead: nonNeg.optional(), cacheWrite: nonNeg.optional() });
+const priceRates = { input: nonNeg, output: nonNeg, cacheRead: nonNeg.optional(), cacheWrite: nonNeg.optional() };
+const priceSchema = z.object({ ...priceRates, longContext: z.object({ aboveTokens: nonNeg, ...priceRates }).optional() });
 const patterns = z.array(z.string());
 function teamSchema() { return z.object({ summary: z.string(), roles: z.array(z.string().min(1)) }); }
 const band = z.object({ min: nonNeg, max: nonNeg });
@@ -92,7 +99,7 @@ export const policySchema: z.ZodType<Policy> = z.object({
   prices: z.record(z.string(), priceSchema),
   serviceTierMultipliers: z.record(z.string(), nonNeg),
   baselineModel: z.string().nullable(),
-  routing: z.object({ defaultOn: z.boolean(), respectManualPicks: z.boolean(), routeAgentMessages: z.boolean(), holdAboveTokens: nonNeg, routeNotes: z.boolean() }),
+  routing: z.object({ defaultOn: z.boolean(), respectManualPicks: z.boolean(), routeAgentMessages: z.boolean(), holdAboveTokens: nonNeg, routeNotes: z.boolean(), holdEffortFollowsMessage: z.boolean() }),
   teams: z.object({ trivial: teamSchema(), small: teamSchema(), medium: teamSchema(), large: teamSchema(), xlarge: teamSchema() }),
   roles: z.record(z.string(), z.object({ gears: z.record(z.string(), roleGearSchema), budget: budgetSchema })),
   signalRoles: z.record(z.string(), z.array(z.string().min(1))),
@@ -274,7 +281,12 @@ export const DEFAULT_POLICY: Policy = {
     },
     "claude-haiku-5-5": {
       "input": 0.1,
-      "output": 0.5
+      "output": 0.5,
+      "longContext": {
+        "aboveTokens": 100000,
+        "input": 0.5,
+        "output": 2.5
+      }
     },
     "claude-haiku-4-5": {
       "input": 1,
@@ -290,7 +302,8 @@ export const DEFAULT_POLICY: Policy = {
     "respectManualPicks": true,
     "routeAgentMessages": true,
     "holdAboveTokens": 60000,
-    "routeNotes": true
+    "routeNotes": true,
+    "holdEffortFollowsMessage": true
   },
   "teams": DEFAULT_TEAMS,
   "roles": DEFAULT_ROLES,
