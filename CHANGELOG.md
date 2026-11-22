@@ -6,6 +6,8 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-22
+
 ### Added
 
 - **Improve my rules** button on the analytics page: opens a new-thread draft that asks an agent to review your routing and propose rule changes you approve.
@@ -73,7 +75,8 @@ First release.
   and model mix, daily cost, model transitions and recent decisions.
 - `bb gearshift` command (`status`, `on`, `off`, `explain`, `policy`) and an agent skill.
 
-[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/vanZeben/bb-gearshift/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/vanZeben/bb-gearshift/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/vanZeben/bb-gearshift/compare/v0.1.0...v0.2.0
