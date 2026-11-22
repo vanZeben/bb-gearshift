@@ -9,6 +9,12 @@ describe("buildReviewPrompt", () => {
   });
 
   it("asks for approval before applying changes", () => {
-    expect(buildReviewPrompt(90)).toContain("apply only the ones I approve");
+    expect(buildReviewPrompt(90)).toContain("Apply only the changes I approve");
+  });
+
+  it("offers replay to test a proposed change first", () => {
+    const prompt = buildReviewPrompt(30);
+    expect(prompt).toContain('"bb gearshift replay --days 30 --set <path>=<value>"');
+    expect(prompt.indexOf("replay")).toBeLessThan(prompt.indexOf("Apply only"));
   });
 });

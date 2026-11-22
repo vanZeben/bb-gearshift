@@ -6,6 +6,8 @@ import type { DecisionRow } from "./store";
 
 const DAY = 86_400_000;
 const ROUTED = new Set(["shift", "keep", "hold"]);
+/** Actions that put a thread on a gear: a later hold inherits from the newest of these. */
+const ORIGIN_ACTIONS = new Set(["shift", "keep", "manual", "hold"]);
 const ACTIONS = ["shift", "keep", "hold", "manual", "skip", "off"] as const;
 
 /** Output below this many tokens is "small work" (a short answer or a small edit). */
@@ -26,7 +28,13 @@ export const HINT_MIN_ROWS = 5;
 
 const EFFORT_RANK: Record<string, number> = { none: 0, minimal: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
 
-export interface ReviewOptions { days: number; now?: number }
+export interface ReviewOptions {
+  days: number; now?: number;
+  /** Short hash of the policy in force now; decisions stamped with another hash were made under an earlier policy. */
+  policyRev?: string;
+  /** Epoch ms when the policy last changed (null when unknown). */
+  policyChangedAt?: number | null;
+}
 
 export interface SignalCount { signal: string; count: number }
 export interface TierStats {
@@ -38,6 +46,20 @@ export interface GearStats { label: string; effort: string | null; n: number; co
 export interface ReviewTurn {
   id: number; at: string; threadId: string; tier: Tier; score: number | null; signals: string[];
   gear: string; outputTokens: number; costUsd: number | null;
+  /** The action was a hold: the thread kept a gear an earlier message chose. */
+  held: boolean;
+  holdKind: string | null;
+  /** Held rows: the gear the thread was on before this message. */
+  inheritedGear: string | null;
+  /** Held rows: the decision whose gear was inherited. */
+  holdOriginId: number | null;
+  /** Filled by withTitles at report time; titles are never stored. */
+  threadTitle?: string;
+}
+export interface HoldKindStats { kind: string; n: number; costUsd: number }
+export interface HoldOrigin {
+  originId: number; threadId: string; at: string | null; gear: string | null; tier: Tier | null;
+  heldTurns: number; heldCostUsd: number; threadTitle?: string;
 }
 export interface SignalPrecision { signal: string; n: number; shareOfLargeRows: number; smallOutputShare: number | null }
 export interface ReviewHint { id: string; message: string; evidence: Record<string, number | string> }
@@ -46,12 +68,28 @@ export interface Review {
   counts: { total: number } & Record<(typeof ACTIONS)[number], number>;
   tiers: TierStats[];
   gears: GearStats[];
-  holds: { n: number; costUsd: number; shareOfCost: number; avgContextTokens: number | null; gears: Array<{ gear: string; n: number }> };
+  holds: {
+    n: number; costUsd: number; shareOfCost: number; avgContextTokens: number | null; gears: Array<{ gear: string; n: number }>;
+    kinds: HoldKindStats[];
+    /** Origin decisions whose gear the most held cost inherited. */
+    topOrigins: HoldOrigin[];
+    /** Rows where the hold was waived because switching model was cheaper. */
+    downshifts: number;
+  };
   manualPicks: Array<{ tier: string; model: string; effort: string | null; n: number }>;
   overkill: ReviewTurn[];
   underkill: ReviewTurn[];
   signalPrecision: SignalPrecision[];
-  policy: { tiers: Record<Tier, { min: number; max: number }>; gears: Record<string, Record<string, string>>; holdAboveTokens: number };
+  policy: {
+    tiers: Record<Tier, { min: number; max: number }>; gears: Record<string, Record<string, string>>; holdAboveTokens: number;
+    rev: string | null; changedAt: string | null;
+    /** Routed decisions in the window. */
+    routedDecisions: number;
+    /** Routed decisions stamped with a policy other than the current one. */
+    olderDecisions: number;
+    /** Routed decisions with no stamp (made before stamping existed). */
+    unstampedDecisions: number;
+  };
   hints: ReviewHint[];
 }
 
@@ -113,10 +151,55 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
   const heldRows = routed.filter((r) => r.action === "hold");
   const heldCost = sum(heldRows.map((r) => r.cost_usd ?? 0));
   const ctx = heldRows.filter((r) => r.context_tokens !== null).map((r) => r.context_tokens!);
+
+  // Hold origin: the stored id, else the newest earlier start-turn row of the thread that set a gear (a hold passes it on).
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const gearSetters = new Map<string, DecisionRow[]>();
+  for (const r of [...rows].sort((a, b) => a.id - b.id)) {
+    if (r.attempt !== "start-turn" || !ORIGIN_ACTIONS.has(r.action)) continue;
+    gearSetters.set(r.thread_id, [...(gearSetters.get(r.thread_id) ?? []), r]);
+  }
+  const originMemo = new Map<number, number | null>();
+  const originOf = (r: DecisionRow): number | null => {
+    if (r.hold_origin_id !== null && r.hold_origin_id !== undefined) return r.hold_origin_id;
+    if (originMemo.has(r.id)) return originMemo.get(r.id)!;
+    const list = gearSetters.get(r.thread_id) ?? [];
+    let prev: DecisionRow | undefined;
+    for (let i = list.length - 1; i >= 0; i--) if (list[i]!.id < r.id) { prev = list[i]; break; }
+    const origin = !prev ? null : prev.action === "hold" ? originOf(prev) : prev.id;
+    originMemo.set(r.id, origin);
+    return origin;
+  };
+  const originGear = (o: DecisionRow): string | null =>
+    o.action === "manual" ? (o.requested_model ? gearText(o.requested_model, o.requested_effort) : null)
+      : o.routed_label || o.routed_model ? gearText(o.routed_label ?? o.routed_model, o.routed_effort) : null;
+
+  const kindMap = new Map<string, HoldKindStats>();
+  const originMap = new Map<number, { threadId: string; heldTurns: number; heldCostUsd: number }>();
+  for (const r of heldRows) {
+    const kind = r.hold_kind ?? "unknown";
+    const k = kindMap.get(kind) ?? { kind, n: 0, costUsd: 0 };
+    k.n++; k.costUsd += r.cost_usd ?? 0; kindMap.set(kind, k);
+    const oid = originOf(r);
+    if (oid === null) continue;
+    const o = originMap.get(oid) ?? { threadId: r.thread_id, heldTurns: 0, heldCostUsd: 0 };
+    o.heldTurns++; o.heldCostUsd += r.cost_usd ?? 0; originMap.set(oid, o);
+  }
+  const topOrigins: HoldOrigin[] = [...originMap].map(([originId, o]) => {
+    const row = byId.get(originId);
+    return {
+      originId, threadId: o.threadId, at: row ? new Date(row.at).toISOString() : null, gear: row ? originGear(row) : null,
+      tier: row && isTier(row.tier) ? row.tier : null, heldTurns: o.heldTurns, heldCostUsd: round(o.heldCostUsd, 4),
+    };
+  }).sort((a, b) => b.heldCostUsd - a.heldCostUsd || b.heldTurns - a.heldTurns || a.originId - b.originId).slice(0, LIST_LIMIT);
+
   const holds: Review["holds"] = {
     n: heldRows.length, costUsd: round(heldCost, 4), shareOfCost: totalCost > 0 ? round(heldCost / totalCost, 3) : 0,
     avgContextTokens: ctx.length ? Math.round(sum(ctx) / ctx.length) : null,
     gears: [...tally(heldRows.map((r) => gearText(r.routed_label, r.routed_effort)))].map(([gear, n]) => ({ gear, n })).sort((a, b) => b.n - a.n),
+    kinds: [...kindMap.values()].map((k) => ({ ...k, costUsd: round(k.costUsd, 4) })).sort((a, b) => b.costUsd - a.costUsd || b.n - a.n || a.kind.localeCompare(b.kind)),
+    topOrigins,
+    downshifts: inWindow.filter((r) => r.hold_kind === "downshift").length,
   };
 
   const manual = inWindow.filter((r) => r.action === "manual");
@@ -130,10 +213,17 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
   const tierOrder = (t: string) => { const i = (TIERS as readonly string[]).indexOf(t); return i < 0 ? 99 : i; };
   const manualPicks = [...manualMap.values()].sort((a, b) => tierOrder(a.tier) - tierOrder(b.tier) || b.n - a.n);
 
-  const toTurn = (r: DecisionRow): ReviewTurn => ({
-    id: r.id, at: new Date(r.at).toISOString(), threadId: r.thread_id, tier: r.tier as Tier, score: r.score, signals: signalsOf(r),
-    gear: gearText(r.routed_label, r.routed_effort), outputTokens: r.output_tokens!, costUsd: r.cost_usd,
-  });
+  const toTurn = (r: DecisionRow): ReviewTurn => {
+    const held = r.action === "hold";
+    const holdOriginId = held ? originOf(r) : null;
+    const originRow = holdOriginId !== null ? byId.get(holdOriginId) : undefined;
+    const inheritedGear = !held ? null : r.current_model ? gearText(r.current_model, r.current_effort ?? null) : originRow ? originGear(originRow) : null;
+    return {
+      id: r.id, at: new Date(r.at).toISOString(), threadId: r.thread_id, tier: r.tier as Tier, score: r.score, signals: signalsOf(r),
+      gear: gearText(r.routed_label, r.routed_effort), outputTokens: r.output_tokens!, costUsd: r.cost_usd,
+      held, holdKind: r.hold_kind ?? null, inheritedGear, holdOriginId,
+    };
+  };
   const newest = (a: DecisionRow, b: DecisionRow) => b.at - a.at || b.id - a.id;
   const overkill = routed.filter((r) => (r.tier === "large" || r.tier === "xlarge") && smallOut(r)).sort(newest).slice(0, LIST_LIMIT).map(toTurn);
   const underkill = routed.filter((r) => (r.tier === "trivial" || r.tier === "small") && r.output_tokens !== null && r.output_tokens > BIG_OUTPUT_TOKENS).sort(newest).slice(0, LIST_LIMIT).map(toTurn);
@@ -156,16 +246,23 @@ export function buildReview(rows: DecisionRow[], policy: Policy, opts: ReviewOpt
   const review: Review = {
     period: { days: opts.days, from: new Date(from).toISOString(), to: new Date(now).toISOString() },
     counts, tiers, gears, holds, manualPicks, overkill, underkill, signalPrecision,
-    policy: { tiers: policy.tiers, gears: gearsByProvider, holdAboveTokens: policy.routing.holdAboveTokens },
+    policy: {
+      tiers: policy.tiers, gears: gearsByProvider, holdAboveTokens: policy.routing.holdAboveTokens,
+      rev: opts.policyRev ?? null,
+      changedAt: opts.policyChangedAt === null || opts.policyChangedAt === undefined ? null : new Date(opts.policyChangedAt).toISOString(),
+      routedDecisions: routed.length,
+      olderDecisions: opts.policyRev === undefined ? 0 : routed.filter((r) => r.policy_rev !== null && r.policy_rev !== undefined && r.policy_rev !== opts.policyRev).length,
+      unstampedDecisions: routed.filter((r) => r.policy_rev === null || r.policy_rev === undefined).length,
+    },
     hints: [],
   };
-  review.hints = buildHints(review, largeRows.length, manual, policy);
+  review.hints = buildHints(review, largeRows.length, manual, policy, { from, now, changedAt: opts.policyChangedAt ?? null });
   return review;
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
-function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: Policy): ReviewHint[] {
+function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: Policy, win: { from: number; now: number; changedAt: number | null }): ReviewHint[] {
   const hints: ReviewHint[] = [];
   const x = rv.tiers.find((t) => t.tier === "xlarge");
   if (x && x.n >= HINT_MIN_ROWS && x.share > HINT_XLARGE_SHARE && (x.smallOutputShare ?? 0) > HINT_SMALL_OUTPUT_SHARE) {
@@ -189,8 +286,15 @@ function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: P
   if (rv.holds.n >= HINT_MIN_ROWS && rv.holds.shareOfCost > HINT_HOLD_COST_SHARE) {
     hints.push({
       id: "hold-cost",
-      message: `Held messages are ${pct(rv.holds.shareOfCost)} of cost. A hold keeps the gear an earlier message chose, so a large/x-large effort carries into every held turn. Consider a lower effort on the xlarge/large gear, or accept it (a hold is cheaper than re-reading a big context).`,
+      message: `Held messages are ${pct(rv.holds.shareOfCost)} of cost. A hold keeps the gear an earlier message chose; with routing.holdEffortFollowsMessage on, a held turn lowers its effort to the message's own tier. Check that setting, then look at the top hold origins above: a large/x-large origin turn sets the gear for every turn it holds. Or accept it (a hold is cheaper than re-reading a big context).`,
       evidence: { holds: rv.holds.n, costUsd: rv.holds.costUsd, shareOfCost: rv.holds.shareOfCost },
+    });
+  }
+  if (win.changedAt !== null && win.changedAt >= win.from && win.changedAt <= win.now) {
+    hints.push({
+      id: "policy-changed",
+      message: `The policy changed on ${new Date(win.changedAt).toISOString().slice(0, 10)}, inside this period: gears chosen before that date may not reflect the current policy.`,
+      evidence: { changedAt: new Date(win.changedAt).toISOString(), olderDecisions: rv.policy.olderDecisions },
     });
   }
   for (const t of TIERS) {
@@ -211,7 +315,23 @@ function buildHints(rv: Review, largeN: number, manual: DecisionRow[], policy: P
   return hints;
 }
 
+/** Unique thread ids the report lists (overkill, underkill and hold origins), so the server can fetch their titles. */
+export function reviewThreadIds(rv: Review): string[] {
+  return [...new Set([...rv.overkill, ...rv.underkill, ...rv.holds.topOrigins].map((t) => t.threadId))];
+}
+
+/** Titles derive from message text and are never stored: the server fetches them at report time and adds them here. */
+export function withTitles(rv: Review, titles: Record<string, string>): Review {
+  const tag = <T extends { threadId: string }>(x: T): T => {
+    const title = Object.prototype.hasOwnProperty.call(titles, x.threadId) ? titles[x.threadId] : undefined;
+    return title ? { ...x, threadTitle: title } : x;
+  };
+  return { ...rv, overkill: rv.overkill.map(tag), underkill: rv.underkill.map(tag), holds: { ...rv.holds, topOrigins: rv.holds.topOrigins.map(tag) } };
+}
+
 const usd = (n: number) => `$${n.toFixed(2)}`;
+const threadRef = (x: { threadId: string; threadTitle?: string }) => `thread ${x.threadId}${x.threadTitle ? ` "${x.threadTitle}"` : ""}`;
+const stamp = (iso: string) => `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
 const num = (n: number | null) => (n === null ? "n/a" : String(n));
 
 export function formatReview(rv: Review): string {
@@ -233,6 +353,14 @@ export function formatReview(rv: Review): string {
   L.push("A hold keeps the gear (model and effort) an earlier message put the thread on, so the effort of the large and x-large gears carries into every held turn of a long thread.");
   L.push(`- ${rv.holds.n} held, ${usd(rv.holds.costUsd)} (${pct(rv.holds.shareOfCost)} of cost), avg context ${num(rv.holds.avgContextTokens)} tokens`);
   if (rv.holds.gears.length) L.push(`- held gears: ${rv.holds.gears.map((g) => `${g.gear} ${g.n}`).join(", ")}`);
+  if (rv.holds.kinds.length) L.push(`- hold kinds: ${rv.holds.kinds.map((k) => `${k.kind} ${k.n} (${usd(k.costUsd)})`).join(", ")}`);
+  if (rv.holds.downshifts) L.push(`- ${rv.holds.downshifts} ${rv.holds.downshifts === 1 ? "hold was" : "holds were"} waived for a cheaper model`);
+  if (rv.holds.topOrigins.length) {
+    L.push("Top hold origins (the turn whose gear later messages inherited)");
+    for (const o of rv.holds.topOrigins) {
+      L.push(`- #${o.originId} ${o.at ? `${stamp(o.at)} ` : "(outside this period) "}${threadRef(o)}${o.tier ? ` ${o.tier}` : ""}${o.gear ? ` on ${o.gear}` : ""}: ${o.heldTurns} held ${o.heldTurns === 1 ? "turn" : "turns"}, ${usd(o.heldCostUsd)}`);
+    }
+  }
 
   L.push("", "Manual picks (you overrode Gearshift)");
   if (!rv.manualPicks.length) L.push("- none");
@@ -241,7 +369,10 @@ export function formatReview(rv: Review): string {
   const turns = (title: string, list: ReviewTurn[]) => {
     L.push("", title);
     if (!list.length) L.push("- none");
-    for (const r of list) L.push(`- #${r.id} ${r.at.slice(0, 16)}Z thread ${r.threadId} ${r.tier} score ${num(r.score)} [${r.signals.join(", ")}] on ${r.gear}, output ${r.outputTokens}${r.costUsd !== null ? `, ${usd(r.costUsd)}` : ""}`);
+    for (const r of list) {
+      const held = r.held ? `, held${r.holdKind ? ` (${r.holdKind})` : ""}${r.holdOriginId !== null ? ` from #${r.holdOriginId}` : ""}${r.inheritedGear ? ` on ${r.inheritedGear}` : ""}` : r.holdKind ? `, ${r.holdKind}` : "";
+      L.push(`- #${r.id} ${r.at.slice(0, 16)}Z ${threadRef(r)} ${r.tier} score ${num(r.score)} [${r.signals.join(", ")}] on ${r.gear}${held}, output ${r.outputTokens}${r.costUsd !== null ? `, ${usd(r.costUsd)}` : ""}`);
+    }
   };
   turns(`Possible overkill (large/x-large, output under ${SMALL_OUTPUT_TOKENS} tokens)`, rv.overkill);
   turns(`Possible underkill (trivial/small, output over ${BIG_OUTPUT_TOKENS} tokens)`, rv.underkill);
@@ -254,6 +385,13 @@ export function formatReview(rv: Review): string {
   L.push(`- bands: ${TIERS.map((t) => `${t} ${rv.policy.tiers[t].min}-${rv.policy.tiers[t].max}`).join(", ")}`);
   for (const [pid, g] of Object.entries(rv.policy.gears)) L.push(`- gears ${pid}: ${TIERS.map((t) => `${t} ${g[t]}`).join("; ")}`);
   L.push(`- holdAboveTokens: ${rv.policy.holdAboveTokens}`);
+  const p = rv.policy;
+  const note = [
+    p.changedAt ? `Policy last changed ${stamp(p.changedAt)}` : "",
+    p.rev !== null && p.olderDecisions > 0 ? `${p.olderDecisions} of ${p.routedDecisions} decisions in the window were made under an earlier policy` : "",
+    p.unstampedDecisions > 0 ? `${p.unstampedDecisions} ${p.unstampedDecisions === 1 ? "has" : "have"} no stamp (made before stamping)` : "",
+  ].filter(Boolean);
+  if (note.length) L.push(`- ${note.join("; ")}`);
 
   L.push("", "Hints (starting points, not actions)");
   if (!rv.hints.length) L.push("- none fired");
