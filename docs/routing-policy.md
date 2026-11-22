@@ -221,20 +221,43 @@ Checked in this order; the first that applies decides.
 | 7 | The message names a model ("use opus", "with haiku") | runs on that model |
 | 8 | You picked a model by hand, with "A model picked by hand wins" on | keeps your pick |
 | 9 | A continuation ("go ahead") | keeps the thread's current gear |
-| 10 | The tier's gear would be a **downshift** and the thread's context is at least the hold threshold (60,000 tokens) | **holds** the current gear |
+| 10 | The tier's gear would be a **downshift** and the thread's context is at least the hold threshold (60,000 tokens) | **holds** the current model; the effort follows the message (see below) |
 | 11 | Already on the tier's gear | sent as is |
 | 12 | Otherwise | **shifts** to the tier's gear |
 
 ### Why long threads hold
 
-Prompt caches belong to one model, and on Anthropic models changing the reasoning effort
-mid-conversation can invalidate the message cache too. On a thread with a large context, the
-next turn on a different model re-reads the whole context at full input price. For a short
-reply that re-read usually costs more than the cheaper model saves, so Gearshift keeps the
-current gear. Upshifts always happen: when a message needs more capability, quality wins.
+Prompt caches belong to one model. On a thread with a large context, the next turn on a
+different model re-reads the whole context at full input price, so for most replies a model
+switch costs more than the cheaper model saves. Above the hold threshold Gearshift therefore
+keeps the thread's **model**, but every message is still scored on its own:
+
+1. **The effort follows the message.** A held message runs at its own tier's effort when that
+   is lower than the thread's current effort. A "thanks" on an Opus · XHigh thread runs on
+   Opus · Low; a large task on the same thread runs on Opus · High. A hold never raises the
+   effort, and large and x-large messages never drop below medium.
+2. **A trivial or small message may still leave the model** when one turn on the cheaper model
+   costs less even with the context re-read uncached: Gearshift compares the context written
+   to the new model's cache plus 2,000 output tokens there, against the context read from the
+   current model's cache plus the same output, at list prices (long-context rates included).
+   With the default prices a trivial message on Opus moves to Haiku up to 100k tokens of
+   context, and stays on Opus above that, where Haiku's long-context rates apply.
+3. **Continuations keep the whole gear.** "Go ahead" carries on the work the gear was chosen
+   for.
+4. **Upshifts always happen**: when a message needs more capability, quality wins.
+
+**Does an effort change keep the cache?** On Claude Code, yes for the current models. Claude
+Code sends the effort inside the conversation at the turn where it changes ("per-turn effort"),
+which keeps the prompt cache valid; bb applies the new effort to the running session without
+restarting it. Where per-turn effort is not available (older models, or the API refusing it),
+Claude Code sends effort as a top-level parameter, and changing it rewrites the cached
+conversation. If you see cache misses after effort changes on your provider, switch off
+**Lower the effort of held messages to their own size** (`holdEffortFollowsMessage`): holds
+then keep model and effort, as in 0.3.0 and earlier. Other providers have not been checked.
 
 Set the threshold under **Don't downshift above this many context tokens**; `0` turns
-holding off.
+holding off. Try a change on your own history first with `bb gearshift replay --days 30
+--set routing.holdAboveTokens=120000`.
 
 ## Tuning recipes
 

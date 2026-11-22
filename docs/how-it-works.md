@@ -45,6 +45,15 @@ bb asks every plugin hook about each message before it reaches a provider
   decision that created it (`queued_links`, filled from the `message.queued` event) and
   answers `proceed` for any linked row. A model you picked by hand therefore survives a
   queue wait, and two identical messages still make two decisions.
+- **Long threads hold their model, not their effort.** Above the hold threshold a message is
+  still scored on its own: it keeps the thread's model (a switch would re-read the context
+  uncached) but runs at its own tier's effort when that is lower, never higher, and never below
+  medium for large and x-large work. A trivial or small message leaves the model only when one
+  turn on the cheaper model costs less, re-read included. Claude Code sends the effort inside
+  the conversation at the turn where it changes, so on current models an effort change keeps
+  the prompt cache. Each decision records its hold kind (`gear`, `effort`, `continuation` or
+  `downshift`) and, for a hold, the decision it inherited from. The rule is in
+  [the routing policy guide](routing-policy.md#why-long-threads-hold).
 - **Rows are amended by id.** For a grouped drain the row ids come from `ctx.queuedMessages`,
   and every row in the group is amended. A row whose text doesn't match the decision is
   never touched, whichever plugin owns its wait.
@@ -164,10 +173,20 @@ provider's xlarge gear. Models without a known price are counted in tokens only.
 
 `bb gearshift review [--days N] [--json]` turns the stored decisions of a period into a report:
 messages per tier and action, output-token percentiles per tier, cost per gear, how much cost
-sits in held turns, hand-picked models, routed messages that look oversized or undersized for
-the work they produced, how reliably each signal predicts large work, and a few hints with
-their evidence numbers. It reads only stored metadata (lengths, signals, scores, token usage
-and thread ids). No message text exists in storage, so the report cannot contain any.
+sits in held turns (by hold kind, and the origin turns whose gear the holds carried),
+hand-picked models, routed messages that look oversized or undersized for the work they
+produced (marked held or not, with the gear they inherited), how reliably each signal predicts
+large work, when the policy last changed and how many decisions predate it, and a few hints
+with their evidence numbers. It reads only stored metadata (lengths, signals, scores, token
+usage and thread ids). No message text exists in storage, so the report cannot contain any.
+Thread titles are looked up from bb when the report runs and are not stored.
+
+`bb gearshift replay [--days N] [--set <path>=<value>]... [--json]` (or `review --replay`)
+re-runs the same decisions under the current policy and hold rule, or under hypothetical edits,
+and prints before/after tier shares, holds and estimated cost. Because messages aren't stored,
+it can't re-score them: score bands, gears, efforts and the hold rule replay; scoring-rule
+changes don't. Costs reuse each turn's recorded usage on the new gear, and the report says
+which parts are estimated.
 
 The **Improve my rules** button on the analytics page opens a new-thread draft that asks an
 agent to run the report and propose changes. The agent opens one of the listed threads only if

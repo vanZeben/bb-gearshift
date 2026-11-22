@@ -30,7 +30,7 @@ It also orchestrates. For a medium or larger message, Gearshift tells the agent 
 
 - **Pay for the work, not the habit.** Most messages in a coding session are follow-ups, acknowledgements and small fixes. Gearshift sends them to a cheaper gear and saves the top model for the work that needs it.
 - **Orchestrates sub-agents.** Medium and larger messages come with a team: implementers, QA, review, even on another provider. Each sub-agent runs on its role's model with a token budget, and Gearshift stops it at the limit. Big work gets split across the right models instead of running on one.
-- **Never wastes your cache.** Prompt caches belong to one model. Moving a long thread to a cheaper model makes it re-read its whole context uncached, which can cost more than the reply saves. Gearshift holds long threads on their current model and only shifts them up.
+- **Never wastes your cache.** Prompt caches belong to one model. Moving a long thread to a cheaper model makes it re-read its whole context uncached, which can cost more than the reply saves. Gearshift holds long threads on their current model and only shifts them up, while each message still gets its own effort: a "thanks" on a long Opus thread runs on Opus at low effort.
 - **Works on every provider.** Built-in gears for Claude Code and Codex, and size-based gears for Pi, ACP agents and any other provider. Gears follow the provider's live model list, so new model releases are picked up without an update.
 - **No extra model call.** Scoring is a handful of local rules: well under a millisecond, nothing sent anywhere, no hidden classification turn.
 - **You stay in charge.** Pick a model by hand and that message keeps it. Write "use opus" in a message and it runs there. Every rule, signal and gear is a setting.
@@ -38,7 +38,7 @@ It also orchestrates. For a medium or larger message, Gearshift tells the agent 
 
 ## How it routes
 
-<p align="center"><img src="docs/assets/diagrams/routing.svg" width="100%" alt="How Gearshift routes a message. If Gearshift is off for the thread, or the message is a steer, retry or system message, it is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise the text is scored 0 to 14 with local rules, the tier picks a gear for the provider, a downshift on a long thread holds the current gear, a message already on that gear is sent as is, and otherwise Gearshift shifts, then sends."></p>
+<p align="center"><img src="docs/assets/diagrams/routing.svg" width="100%" alt="How Gearshift routes a message. If Gearshift is off for the thread, or the message is a steer, retry or system message, it is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise the text is scored 0 to 14 with local rules, the tier picks a gear for the provider, a downshift on a long thread keeps the current model at the message's own effort, a message already on that gear is sent as is, and otherwise Gearshift shifts, then sends."></p>
 
 
 A shift takes about a tenth of a second: bb holds the message for a moment, Gearshift sets its model and effort, and bb sends it on. If anything goes wrong, or a lookup takes longer than 1.5 seconds, the message goes through unchanged. [How it works](docs/how-it-works.md) has the details.
@@ -142,6 +142,7 @@ bb gearshift off --thread <id>                    # turn it off for a thread
 bb gearshift explain "<text>" [--provider <id>]   # how a message would score, no side effects
 bb gearshift policy                               # the routing policy in effect
 bb gearshift review [--days N] [--json]           # routing report: tiers, holds, likely over- and under-sized gears
+bb gearshift replay [--days N] [--set path=value]  # what your history would cost under the current or a changed policy
 bb gearshift policy set <path> <value>            # change one policy value, e.g. tiers.large.max 12
 bb gearshift policy unset <path>                  # restore one value to its default
 bb gearshift policy add-pattern <classId> <regex> # add a scoring pattern to a signal class
