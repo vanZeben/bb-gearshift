@@ -185,12 +185,12 @@ export class Store {
   }
   /** Tier of the newest medium-or-larger decision of the thread. */
   lastNoteworthyTier(threadId: string): string | null {
-    const r = this.db.prepare(`SELECT tier FROM decisions WHERE thread_id=? AND tier IN ('medium','large','xlarge') ORDER BY id DESC LIMIT 1`).get(threadId) as { tier: string } | undefined;
+    const r = this.db.prepare(`SELECT tier FROM decisions WHERE thread_id=? AND (tier IN ('medium','large','xlarge') OR (signal_roles IS NOT NULL AND signal_roles NOT IN ('','[]'))) ORDER BY id DESC LIMIT 1`).get(threadId) as { tier: string } | undefined;
     return r?.tier ?? null;
   }
   /** Roles the signals of the thread's last noteworthy decision added to its team. */
   lastSignalRoles(threadId: string): string[] {
-    const r = this.db.prepare(`SELECT signal_roles FROM decisions WHERE thread_id=? AND tier IN ('medium','large','xlarge') ORDER BY id DESC LIMIT 1`).get(threadId) as { signal_roles: string } | undefined;
+    const r = this.db.prepare(`SELECT signal_roles FROM decisions WHERE thread_id=? AND (tier IN ('medium','large','xlarge') OR (signal_roles IS NOT NULL AND signal_roles NOT IN ('','[]'))) ORDER BY id DESC LIMIT 1`).get(threadId) as { signal_roles: string } | undefined;
     try { return r ? (JSON.parse(r.signal_roles) as string[]) : []; } catch { return []; }
   }
   patchRun(id: number, f: Partial<Pick<RunRow, "spent" | "status" | "ended_at">>): void {

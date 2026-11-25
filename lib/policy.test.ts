@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TIERED_GEARS } from "./fixtures";
 import { DEFAULT_POLICY, TIERS, unsafeRegexReason, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, validatePolicy, type Policy } from "./policy";
 
 const merge = (o: Record<string, unknown>) => mergePolicy(DEFAULT_POLICY, o);
@@ -99,13 +100,13 @@ describe("validatePolicy", () => {
 describe("roles and signalRoles", () => {
   it("defaults drop lead/triage/digest/writing and map research and investigation signals", () => {
     for (const r of ["lead", "triage", "digest", "writing"]) expect(DEFAULT_POLICY.roles[r]).toBeUndefined();
-    expect(DEFAULT_POLICY.signalRoles).toEqual({ research: ["research"], investigation: ["explore"] });
+    expect(DEFAULT_POLICY.signalRoles).toEqual({ research: ["research"], investigation: ["explore"], breadth: ["explore"] });
   });
   it("merges added and removed roles and replaces a signal's list", () => {
     const x = merge({ roles: { scout: { gears: { "*": { model: "@small", effort: "low" } }, budget: { trivial: 1, small: 2, medium: 3, large: 4, xlarge: 5 } }, review: null }, signalRoles: { research: ["research", "scout"], investigation: null } });
     expect(x.roles.scout).toBeDefined();
     expect(x.roles.review).toBeUndefined();
-    expect(x.signalRoles).toEqual({ research: ["research", "scout"] });
+    expect(x.signalRoles).toEqual({ research: ["research", "scout"], breadth: ["explore"] });
   });
   it("diffs only the changed signalRoles", () => {
     const x = merge({ signalRoles: { investigation: ["explore", "qa"] } });
@@ -129,10 +130,26 @@ describe("resolvePolicy", () => {
 describe("ladderFor", () => {
   it("uses the provider's tiers, falling back to *", () => {
     const l = ladderFor(DEFAULT_POLICY, "claude-code");
-    expect(l.trivial).toEqual({ model: "haiku", effort: "low" });
-    expect(ladderFor(DEFAULT_POLICY, "someone-else").medium).toEqual({ model: "@medium", effort: "medium" });
+    expect(l.trivial).toEqual({ model: "opus", effort: "low" });
+    expect(ladderFor(DEFAULT_POLICY, "someone-else").medium).toEqual({ model: "@large", effort: "medium" });
     const p = merge({ gears: { codex: { large: null } } });
     expect(ladderFor(p, "codex").large).toEqual(DEFAULT_POLICY.gears["*"]!.large);
+  });
+  it("keeps the lead on the capable model at every tier by default, scaling only effort", () => {
+    const efforts = (id: string) => TIERS.map((t) => ladderFor(DEFAULT_POLICY, id)[t].effort);
+    expect(TIERS.map((t) => ladderFor(DEFAULT_POLICY, "claude-code")[t].model)).toEqual(["opus", "opus", "opus", "opus", "opus"]);
+    expect(efforts("claude-code")).toEqual(["low", "medium", "high", "high", "xhigh"]);
+    expect(TIERS.map((t) => ladderFor(DEFAULT_POLICY, "codex")[t].model)).toEqual(Array(5).fill("@default"));
+    expect(TIERS.map((t) => ladderFor(DEFAULT_POLICY, "some-acp")[t].model)).toEqual(Array(5).fill("@large"));
+    expect(efforts("some-acp")).toEqual(["low", "medium", "medium", "high", "xhigh"]);
+  });
+  it("a gears override replaces the ladder per provider, so a tiered ladder can be configured", () => {
+    const p = mergePolicy(DEFAULT_POLICY, { gears: TIERED_GEARS });
+    expect(ladderFor(p, "claude-code").trivial).toEqual({ model: "haiku", effort: "low" });
+    expect(ladderFor(p, "someone-else").medium).toEqual({ model: "@medium", effort: "medium" });
+    expect(ladderFor(p, "codex").small).toEqual({ model: "@small", effort: "medium" });
+    expect(ladderFor(p, "codex").medium).toEqual({ model: "@default", effort: "medium" });
+    expect(validatePolicy(p)).toEqual([]);
   });
 });
 

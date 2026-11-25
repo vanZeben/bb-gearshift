@@ -171,15 +171,15 @@ export const DEFAULT_POLICY: Policy = {
   "gears": {
     "*": {
       "trivial": {
-        "model": "@small",
+        "model": "@large",
         "effort": "low"
       },
       "small": {
-        "model": "@small",
+        "model": "@large",
         "effort": "medium"
       },
       "medium": {
-        "model": "@medium",
+        "model": "@large",
         "effort": "medium"
       },
       "large": {
@@ -193,15 +193,15 @@ export const DEFAULT_POLICY: Policy = {
     },
     "claude-code": {
       "trivial": {
-        "model": "haiku",
+        "model": "opus",
         "effort": "low"
       },
       "small": {
-        "model": "sonnet",
+        "model": "opus",
         "effort": "medium"
       },
       "medium": {
-        "model": "sonnet",
+        "model": "opus",
         "effort": "high"
       },
       "large": {
@@ -215,11 +215,11 @@ export const DEFAULT_POLICY: Policy = {
     },
     "codex": {
       "trivial": {
-        "model": "@small",
+        "model": "@default",
         "effort": "low"
       },
       "small": {
-        "model": "@small",
+        "model": "@default",
         "effort": "medium"
       },
       "medium": {
@@ -310,7 +310,7 @@ export const DEFAULT_POLICY: Policy = {
   },
   "teams": DEFAULT_TEAMS,
   "roles": DEFAULT_ROLES,
-  "signalRoles": { "research": ["research"], "investigation": ["explore"] },
+  "signalRoles": { "research": ["research"], "investigation": ["explore"], "breadth": ["explore"] },
   "scoring": {
     "trivial": {
       "maxChars": 60,
@@ -352,7 +352,8 @@ export const DEFAULT_POLICY: Policy = {
         "add": 3,
         "patterns": [
           "\\b(?:slow|figure out|investigat\\w*|debug\\w*|root cause|intermittent\\w*|sometimes|flaky|leak\\w*|crash\\w*)\\b",
-          "\\bwhy (?:is|does|do|are)\\b"
+          "\\bwhy (?:is|does|do|are)\\b",
+          "\\b(?:look(?:ing)? into|dig(?:ging)? into|survey\\w*|find out)\\b"
         ]
       },
       {
@@ -369,7 +370,8 @@ export const DEFAULT_POLICY: Policy = {
         "label": "research",
         "floor": 6,
         "patterns": [
-          "\\b(?:research|compare|benchmark\\w*|evaluate|trade-?offs?|market)\\b"
+          "\\b(?:research|compare|benchmark\\w*|evaluate|trade-?offs?|market)\\b",
+          "\\b(?:synthesi[sz]\\w*|high[- ]leverage)\\b"
         ]
       },
       {

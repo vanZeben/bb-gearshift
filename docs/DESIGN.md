@@ -4,24 +4,53 @@
 > read [how-it-works.md](how-it-works.md); for what the routing rules mean to a user, read
 > [routing-policy.md](routing-policy.md).
 
-Gearshift is a bb plugin that routes every message to the right model and reasoning
-effort for its size, on whatever provider the thread runs on. Small asks go to a small,
-fast model; big builds go to the top model with more thinking. It never needs a fork of
-bb: it uses only public Plugin SDK surfaces.
+Gearshift is a bb plugin that sets the reasoning effort of every message to its size and
+fans the work out to sub-agents on cheaper models, on whatever provider the thread runs on.
+The lead (the main thread) stays on the capable model; small asks get low effort, big builds
+get more thinking and a team. It never needs a fork of bb: it uses only public Plugin SDK
+surfaces.
 
 This document is the contract between the backend (`server.ts`, `lib/`) and the frontend
 (`app.tsx`, `components/`). Change it when the contract changes.
+
+## Principle: the lead stays capable
+
+Under the default policy the main thread does not change model by message size. The lead
+stays on the capable model at every tier; the tier sets its **effort** and the **team** of
+sub-agent roles it can spawn. The gear shift happens by fanning gathering and building out to
+cheaper roles (explore and qa on a small model, research and implement on a mid model, review
+on the top one) through `gearshift_spawn`. The lead plans and synthesizes, and does small
+lookups itself.
+
+Why:
+
+- A demoted lead gives cheap reasoning over expensively gathered context. Plans and synthesis
+  are where the capable model earns its price.
+- One model on the thread means no model switches, so a long thread re-reads its context from
+  cache instead of uncached. Fewer turns need a hold.
+- The route note says so: it ends with "you are the lead: plan and synthesize on this gear, and
+  fan the gathering and building out to these roles with the gearshift_spawn tool (independent
+  pieces in parallel, one sub-agent per source or area); do small lookups yourself".
+
+A tiered ladder (a different model per tier) is still supported and opt-in: set it in
+**Settings → Plugins → Gearshift → Routing policy → Gears**. The rules below (shift, hold,
+downshift) apply to such a ladder. Under the default policy the model never differs between
+tiers, so they mostly act on effort.
+
+Measured by replaying one user's 30 days of history: main-thread cost about +7% with the lead
+on Opus, held turns 164 → 54 (fewer model switches). Sub-agent savings are not in that figure.
 
 ## How a message gets routed
 
 bb asks every plugin hook about each message before it reaches a provider
 (`bb.experimental_hooks.on("message.dispatch")`). A hook can only answer
 `proceed`, `wait` or `reject`; it cannot edit the message. Gearshift therefore shifts
-gears in three steps when the message is not already on the right gear:
+gears in three steps when the message is not already on the right gear (under the default
+policy that usually means a different effort, since the model is the same at every tier):
 
 1. **Decide.** Classify the message text (`lib/classify.ts`), map the tier to a gear for
    the thread's provider (`lib/gears.ts`), apply the rules below (`lib/router.ts`).
-2. **Hold and amend.** Return `{ action: "wait", reason: "Shifting to Sonnet 5.5 · high" }`
+2. **Hold and amend.** Return `{ action: "wait", reason: "Shifting to Opus 5.5 · high" }`
    (bb shows the plugin name next to the reason). bb stores the message as a queued row and
    fires `message.queued`; Gearshift links that row id to its decision (`queued_links`) by
    the message's text fingerprint, sets the row's `model`, `reasoningLevel` and
@@ -96,7 +125,10 @@ whose target differs from the request (the composer asked for something else) am
 
 Why rule 10: prompt caches are scoped to one model. Dropping a 200k-token thread to a
 cheaper model for a "thanks" usually re-reads the whole context uncached, which costs more than
-the answer saves, so the model is held unless the price check (10a) says otherwise. The effort
+the answer saves, so the model is held unless the price check (10a) says otherwise. This rule
+applies to a tiered ladder; under the default policy every tier is the same model, so a hold
+mostly changes the effort (10b), and the cheaper-model downshift (10a) has no cheaper model to
+move to. The effort
 is not held (10b): Claude Code sends effort per turn inside the conversation on the models
 that support it, so an effort change keeps the cache; where it can't, a top-level effort change
 rewrites the cached conversation, and `holdEffortFollowsMessage` off restores whole-gear holds.
@@ -109,7 +141,8 @@ A hold never raises the effort. Upshifts are always allowed: quality first. Rule
 `thread/contextWindowUsage/updated` event.
 
 Gear weight (`gearWeight` in `lib/gears.ts`) = the model's lowest tier position on the
-ladder × 10 + the effort's rank. Lower weight = downshift.
+ladder × 10 + the effort's rank. Lower weight = downshift. Under the default policy the model
+is the same at every tier, so only the effort rank differs.
 
 ## Policy (`lib/policy.ts`)
 
@@ -285,22 +318,22 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
   },
   "gears": {
     "*": {
-      "trivial": { "model": "@small", "effort": "low" },
-      "small": { "model": "@small", "effort": "medium" },
-      "medium": { "model": "@medium", "effort": "medium" },
+      "trivial": { "model": "@large", "effort": "low" },
+      "small": { "model": "@large", "effort": "medium" },
+      "medium": { "model": "@large", "effort": "medium" },
       "large": { "model": "@large", "effort": "high" },
       "xlarge": { "model": "@large", "effort": "xhigh" }
     },
     "claude-code": {
-      "trivial": { "model": "haiku", "effort": "low" },
-      "small": { "model": "sonnet", "effort": "medium" },
-      "medium": { "model": "sonnet", "effort": "high" },
+      "trivial": { "model": "opus", "effort": "low" },
+      "small": { "model": "opus", "effort": "medium" },
+      "medium": { "model": "opus", "effort": "high" },
       "large": { "model": "opus", "effort": "high" },
       "xlarge": { "model": "opus", "effort": "xhigh" }
     },
     "codex": {
-      "trivial": { "model": "@small", "effort": "low" },
-      "small": { "model": "@small", "effort": "medium" },
+      "trivial": { "model": "@default", "effort": "low" },
+      "small": { "model": "@default", "effort": "medium" },
       "medium": { "model": "@default", "effort": "medium" },
       "large": { "model": "@default", "effort": "high" },
       "xlarge": { "model": "@default", "effort": "xhigh" }
@@ -351,9 +384,9 @@ plus `requestedFamily` from `explicitModel.pattern` when enabled.
     },
     "classes": [
       { "id": "action", "label": "change", "floor": 3, "patterns": ["\\b(?:fix|rename|bump|typo|update|add|implement|create|write|change|remove|make|move|delete|wire|configure|install)\\b"] },
-      { "id": "investigation", "label": "investigation", "add": 3, "patterns": ["\\b(?:slow|figure out|investigat\\w*|debug\\w*|root cause|intermittent\\w*|sometimes|flaky|leak\\w*|crash\\w*)\\b", "\\bwhy (?:is|does|do|are)\\b"] },
+      { "id": "investigation", "label": "investigation", "add": 3, "patterns": ["\\b(?:slow|figure out|investigat\\w*|debug\\w*|root cause|intermittent\\w*|sometimes|flaky|leak\\w*|crash\\w*)\\b", "\\bwhy (?:is|does|do|are)\\b", "\\b(?:look(?:ing)? into|dig(?:ging)? into|survey\\w*|find out)\\b"] },
       { "id": "breadth", "label": "breadth", "add": 3, "patterns": ["\\b(?:every|across|entire|whole|everywhere)\\b", "\\ball (?:the )?\\w+s\\b"] },
-      { "id": "research", "label": "research", "floor": 6, "patterns": ["\\b(?:research|compare|benchmark\\w*|evaluate|trade-?offs?|market)\\b"] },
+      { "id": "research", "label": "research", "floor": 6, "patterns": ["\\b(?:research|compare|benchmark\\w*|evaluate|trade-?offs?|market)\\b", "\\b(?:synthesi[sz]\\w*|high[- ]leverage)\\b"] },
       { "id": "large", "label": "large build", "floor": 9, "patterns": [
         "(?<!\\b(?:the|fix|ci|nightly|a broken) )\\bbuild(?:ing)?\\b(?!\\s+(?:is|was|fails?|failed|failing|broke|broken|errors?|logs?|step|output|time)\\b)",
         "\\bport(?:ing)? (?:\\w+ ){0,3}(?:to|into|from)\\b",
@@ -412,6 +445,9 @@ Worked examples with the defaults (keep these as tests):
 | "delete the old migration files" | 5 (change 3 + risk 2; "migration" is a noun, not the large-build verb) | small |
 | "research which models are good for which tasks" | 6 | medium |
 | "the login is flaky" | 8 (unmatched 3 + investigation 3 + risk 2) | medium |
+| "Find the default terraform tags across all platform-* repos" | 6 (unmatched 3 + breadth 3; band bottom, leans to small) | small: Opus · medium, implement + explore roles, route note added |
+| "Look into what's slowing the team down and synthesize it" | 9 (research 6 + investigation 3; band bottom, so it leans to medium) | medium: Opus · high, explore + research roles offered |
+| "Investigate a high-leverage area for me to work on" | 9 (research 6 + investigation 3; leans to medium) | medium: Opus · high, explore + research roles offered |
 | "port the billing service into a plugin" | 9+ | large |
 | "build a plugin with a composer toggle, an analytics page and a settings editor, with tests and a PR" | 12+ | xlarge |
 
@@ -461,7 +497,7 @@ Policy schema (both are plain policy keys, merged like `gears`; roles replace pe
 - `roles: Record<name, { gears: Record<providerId | "*", RoleGearSpec>; budget: Record<Tier, number> }>`. `RoleGearSpec` is a `GearSpec` plus `providerId?` (run the child on another provider) and `effortMediumUp?` (effort used from the medium tier up). `gears` is keyed by the parent thread's provider with `"*"` as fallback. `budget` is in spend tokens.
 - Spend tokens = input + cache writes + output + 0.1 x cache reads (`spendTokens`), from host token classes only.
 
-**Route note.** In `message.dispatch`, a first attempt from a user or agent whose tier is medium or larger (and whose action is shift, keep or hold: a model picked by hand is never held just to add a note) gets one line, `formatRouteNote`: tier, score, team summary, each role with its resolved gear and budget. It is appended to the queued row as an agent-only text block through the same amend as a gear shift (`amendOne`), so the user never sees it. A row that already carries a `[gearshift]` block is never amended twice. When there is no gear change, the amend is note-only and the hook still waits once ("Adding the team note") and releases on re-attempt. Switch: `routeNotes`.
+**Route note.** In `message.dispatch`, a first attempt from a user or agent whose tier is medium or larger, or a small tier whose signals added a fan-out role (and whose action is shift, keep or hold: a model picked by hand is never held just to add a note) gets one line, `formatRouteNote`: tier, score, team summary, each role with its resolved gear and budget, then the lead instruction (`LEAD_INSTRUCTION` in `lib/team.ts`): "you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself". It is appended to the queued row as an agent-only text block through the same amend as a gear shift (`amendOne`), so the user never sees it. A row that already carries a `[gearshift]` block is never amended twice. When there is no gear change, the amend is note-only and the hook still waits once ("Adding the team note") and releases on re-attempt. Switch: `routeNotes`.
 
 **`gearshift_spawn`** (agent tool, `{role, prompt, title?}`): looks up the parent thread, takes the tier of its last decision (default medium), resolves the role through `roleTarget`/`resolveRole` against the target provider's catalog (a cross-provider role loads that provider's catalog), calls `threads.spawn` with `parentThreadId`, `environment: reuse`, the role's model/effort/service tier and `executionInputSources` all `explicit`, then inserts a `runs` row. The hook proceeds untouched for any thread in `runs` and for an explicit-source child of a spawn still in flight (`pendingSpawns`, matched by parent and model, for up to 60 s: the child's first dispatch can reach the hook before `threads.spawn` returns and the `runs` row exists), so a child keeps the gear it was given.
 
@@ -473,7 +509,7 @@ Policy schema (both are plain policy keys, merged like `gears`; roles replace pe
 
 **Host fallback** (`listModels`): the model catalog is host-scoped on some servers. With no environment or host, a plain `providers.models` call can fail ("Local host daemon is not initialized"), so the plugin then asks each host from `hosts.list()` in turn, connected ones first, and uses the first that lists models; it rethrows the first error only if none answers.
 
-**Signal roles (v0.2.1).** `policy.signalRoles: Record<scoringClassId, string[]>` (default `{ research: ["research"], investigation: ["explore"] }`) adds roles to any non-trivial team when the decision's contributions include that class. Validation rejects unknown class ids and unknown roles; maps merge and diff like other maps (`null` deletes). The decision stores its signal roles (`decisions.signal_roles`), and `gearshift_spawn` accepts a role only if it is in the tier's team or that decision's signal roles. The default roles are implement, research, explore, qa, verify, review and architecture; there is no `lead` role, because the lead is the thread itself on the tier's gear.
+**Signal roles (v0.2.1).** `policy.signalRoles: Record<scoringClassId, string[]>` (default `{ research: ["research"], investigation: ["explore"], breadth: ["explore"] }`) adds roles to any non-trivial team when the decision's contributions include that class. Validation rejects unknown class ids and unknown roles; maps merge and diff like other maps (`null` deletes). The decision stores its signal roles (`decisions.signal_roles`), and `gearshift_spawn` accepts a role only if it is in the tier's team or that decision's signal roles. The default roles are implement, research, explore, qa, verify, review and architecture; there is no `lead` role, because the lead is the thread itself on the tier's gear.
 
 ## Storage (`bb.storage.database()`, `lib/store.ts`)
 
@@ -744,7 +780,7 @@ writes `thread_prefs` from it and deletes it.
   (`bb.branding.experimental_icons`), used by the pill, popup, plus-menu row, new-thread
   banner and the analytics nav entry.
 - **Composer pill** (`app.composer.customize`, scopes `thread` and `new-thread`, an
-  `actions` component; expanded layout only). Shows `Auto · Sonnet 5.5 · High` while on:
+  `actions` component; expanded layout only). Shows `Auto · Opus 5.5 · High` while on:
   the preview of the current draft (debounced 250 ms, one shared state per `composer.key`
   for pill and popup), or the last routed gear when the draft is empty; neutral until the
   thread's state has loaded. Off: `Gearshift off`, muted. Clicking it opens the composer
@@ -784,5 +820,6 @@ writes `thread_prefs` from it and deletes it.
 `policy add-pattern <classId> <regex>` and `policy remove-pattern <classId> <regex>` edit the
 saved overrides one plain value at a time (`lib/policy-edit.ts`), validated like the editor's
 Save; invalid edits store nothing.
-`skills/gearshift/SKILL.md` tells agents that Gearshift picks the model per message, that
-"use opus" in a message overrides it, and how to use the commands.
+`skills/gearshift/SKILL.md` tells agents that they are the lead (the thread stays on the capable
+model, and they fan gathering and building out to sub-agents with `gearshift_spawn`), that
+"use opus" in a message overrides routing, and how to use the commands.

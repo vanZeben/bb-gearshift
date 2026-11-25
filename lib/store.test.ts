@@ -40,6 +40,14 @@ describe.skipIf(!makeDb)("Store (in-memory sqlite)", () => {
     expect(cols).not.toContain("text");
     expect(JSON.stringify(s.get(id))).not.toContain("hello");
   });
+  it("a small row whose signals added a fan-out role counts as the thread's noteworthy decision", () => {
+    const s = newStore();
+    s.insertDecision(row({ tier: "medium", signal_roles: "[]" }));
+    s.insertDecision(row({ at: 1_000_100, tier: "small", signal_roles: JSON.stringify(["explore"]) }));
+    s.insertDecision(row({ at: 1_000_200, tier: "small", signal_roles: "[]" }));
+    expect(s.lastNoteworthyTier("t1")).toBe("small");
+    expect(s.lastSignalRoles("t1")).toEqual(["explore"]);
+  });
   it("identical messages make separate rows", () => {
     const s = newStore();
     const a = s.insertDecision(row());

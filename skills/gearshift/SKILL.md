@@ -1,11 +1,11 @@
 ---
 name: gearshift
-description: Gearshift routes each chat message to the right model and reasoning effort for its size. Use when the user asks which model a message ran on, wants to turn automatic routing on or off for a thread, wants to force a specific model, or asks how routing is configured.
+description: Gearshift keeps the lead thread on the capable model, sets its reasoning effort per message, and fans gathering and building out to cheaper sub-agents with gearshift_spawn. Use when a message carries a [gearshift] note, when the user asks which model or effort a message ran on, wants to turn routing on or off for a thread, wants to force a specific model, or asks how routing is configured.
 ---
 
 # Gearshift
 
-Gearshift picks the model and reasoning effort per message: small asks go to a small, fast model, big builds to the top model with more thinking. It does not switch model on a thread with a large context, because that would re-read the context uncached: a held message keeps the model but runs at the effort of its own size (`holdEffortFollowsMessage`).
+By default the lead (you, the main thread) stays on the capable model at every tier. Gearshift sets the reasoning effort per message (low for a "thanks", more for big builds) and the team of sub-agent roles you can start. The gear shift happens by fanning gathering and building out to cheaper sub-agents (explore and qa on Haiku, research and implement on Sonnet, review on Opus) with `gearshift_spawn`. You plan and synthesize. Keeping one model also avoids model switches, so a long thread re-reads its context from cache. A tiered ladder with a different model per tier is opt-in; on one, a thread with a large context does not switch model, because that would re-read the context uncached: a held message keeps the model but runs at the effort of its own size (`holdEffortFollowsMessage`).
 
 - Naming a model in a message overrides routing for that message: "use opus", "with haiku".
 - A model picked by hand in the composer wins for that message (setting "A model picked by hand wins").
@@ -38,10 +38,15 @@ Use this when the user asks to improve, tune or audit their routing, or starts f
 ## Sub-agents: `gearshift_spawn`
 
 Medium and larger messages arrive with an agent-only note that starts with `[gearshift]`, for example:
-`[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → ... · spawn sub-agents with the gearshift_spawn tool`.
+`[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → ... · you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself`.
+A small message gets the note too when its signals added a fan-out role, for example breadth ("across all platform-* repos") adds `explore`.
 It is the user's routing policy talking: the tier of this message, the team that size gets, and for each role the model, effort and token budget it runs on. The user does not see the note.
 
-**When to spawn.** Spawn when the work splits into independent pieces (separate files or modules), or when a different gear fits a job: a cheap model to run tests, a strong one to review the diff, a research or explore pass before you commit to a plan. Do small or tightly coupled work yourself; a sub-agent costs a prompt and a report.
+**When to spawn.** Fan-out is the default operating model. You are the lead: stay on your gear, plan, delegate the gathering and building, and synthesize what comes back.
+- Delegate gathering per source or area: one `explore` or `research` sub-agent per repo, directory, service, document set or question. Spawn them in parallel in one turn.
+- Delegate building to `implement` (disjoint files), checks to `qa` or `verify`, and a read of the diff to `review`.
+- Do the planning, the synthesis and the decisions yourself. Don't hand the final answer to a cheaper model.
+- Do small lookups inline: a single file read, one grep, a quick command. A sub-agent costs a prompt and a report, so skip it for tightly coupled work or anything you can answer in one or two calls.
 
 **How.** Call `gearshift_spawn` with `role`, `prompt` and an optional `title`.
 - Spawn only roles listed in the note (the tier's team plus signal roles such as `research` or `explore`). Any other role is refused. You are the lead; there is no `lead` role.

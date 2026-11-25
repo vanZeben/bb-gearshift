@@ -1,8 +1,13 @@
 # The routing policy
 
 Everything Gearshift decides comes from one **routing policy**: how a message is scored, how
-scores map to tiers, which model and effort each tier runs on for each provider, and when a
-thread holds its gear. Gearshift ships a complete default policy. Your changes are stored on
+scores map to tiers, which model and effort each tier runs on for each provider, which
+sub-agent roles each tier can start, and when a thread holds its gear.
+
+Under the default policy **the lead (the main thread) stays on the capable model at every
+tier**. The tier sets the lead's effort and its team of sub-agent roles; the lead plans and
+synthesizes, and the gathering and building go to cheaper sub-agents. A tiered ladder, with a
+different model per tier, is opt-in (see [Gears](#gears)). Gearshift ships a complete default policy. Your changes are stored on
 top of it, so you keep receiving improved defaults with every release for everything you
 did not change.
 
@@ -28,7 +33,9 @@ how one message scores.
 2. **Signals** in the text build a **score** from 0 to 14.
 3. The score falls in one of five **tiers**.
 4. The tier picks a **gear** for the thread's provider: a model, a reasoning effort, and
-   optionally a service tier such as fast mode.
+   optionally a service tier such as fast mode. By default the model is the capable one at every
+   tier, so the tier mostly sets the effort. It also picks the team of sub-agents the lead can
+   start.
 5. A few [rules](#when-gearshift-does-not-shift) can still keep the current gear, for example
    on a long thread.
 
@@ -44,7 +51,7 @@ matches; if several match, the highest floor wins.
 | Signal | Floor | Matches, for example |
 |---|---|---|
 | change | 3 | fix, rename, bump, typo, update, add, implement, create, write, change, remove, make, move, delete, wire, configure, install |
-| research | 6 | research, compare, benchmark, evaluate, trade-off, market |
+| research | 6 | research, compare, benchmark, evaluate, trade-off, market, synthesize, high-leverage |
 | large build | 9 | build a …, port … into/to/from …, redesign, refactor, migrate (the verb; "migration" is not a trigger), architect, overhaul, rewrite, re-implement, end-to-end, from scratch, a new system / service / app / plugin |
 
 "build" is matched with care: "fix the build", "the build is slow" and "CI build failed" do
@@ -54,7 +61,7 @@ When no floor class matches:
 
 - a **question** ("how does…", "what is…", "…?") starts at **1**;
 - anything else starts at **3** (small), with low confidence, so an unclear ask gets a
-  capable mid-size model rather than the smallest one.
+  moderate effort rather than the lowest.
 
 Two shortcuts come first:
 
@@ -71,7 +78,7 @@ Two shortcuts come first:
 
 | Signal | Adds | Matches, for example |
 |---|---|---|
-| investigation | +3 | slow, figure out, investigate, debug, root cause, intermittent, sometimes, flaky, leak, crash, "why is / does …" |
+| investigation | +3 | slow, figure out, investigate, debug, root cause, intermittent, sometimes, flaky, leak, crash, look into, dig into, survey, find out, "why is / does …" |
 | breadth | +3 | every, across, entire, whole, everywhere, "all the …s" |
 | risk | +2 | production, deploy to prod, drop table, delete, secrets, credentials, customer data, PII, payments, refunds, force-push, rm -rf, publish, release, auth, SSO, SAML, OAuth, login, sessions |
 
@@ -98,9 +105,16 @@ These are the default policy's real scores (`bb gearshift explain` prints the sa
 | delete the old migration files | change 3 + risk 2 | 5 | small |
 | research which models are good for which tasks | research 6 | 6 | medium |
 | the login is flaky | no clear signal 3 + investigation 3 + risk 2 | 8 | medium |
+| Find the default terraform tags across all platform-* repos | no clear signal 3 + breadth 3 = 6, the bottom of medium, so it leans to small | 6 | small, with the explore role offered |
+| Look into what's slowing the team down and synthesize it | research 6 + investigation 3 = 9, the bottom of large, so it leans to medium | 9 | medium |
+| Investigate a high-leverage area for me to work on | research 6 + investigation 3 = 9, leans to medium | 9 | medium |
 | port the billing service into a plugin | large build 9 | 9 | large |
 | update the docs, the tests and the CI pipeline for the new auth flow | change 3 + risk 2 + 3 areas 4 | 9 | large |
 | build a plugin: UI, API, tests and a PR | large build 9 + 4 areas 6 (capped at 14) | 14 | xlarge |
+
+The two "look into" and "high-leverage" messages land on medium: Opus · high on Claude Code,
+with the explore and research roles offered (see [Signal roles](#teams-and-sub-agents)). Before
+those phrases counted as signals, they scored trivial and small.
 
 The **Try a message** tab runs this on your draft policy, before you save, and shows the
 gear each provider would use.
@@ -128,7 +142,8 @@ message routes one tier lower than its band when:
 - no signal matched (low confidence), so the score is a guess.
 
 It moves at most one tier and never up; trivial stays trivial. A message with no signal scores
-3, the bottom of small, so it runs on the trivial gear. A model named in the message, a model
+3, the bottom of small, so it runs on the trivial gear (Opus · low on Claude Code by default)
+and gets the trivial team. A model named in the message, a model
 you picked by hand, and a continuation are not affected, and the hold rule below runs on the
 lower tier. The score and the tier before the lean are recorded, so `bb gearshift review`
 and `bb gearshift replay --set routing.downshiftBias=false` show what it changed. Switch it
@@ -141,13 +156,44 @@ per tier. "All other providers" covers any provider without its own row.
 
 ### Defaults
 
+The lead stays on the capable model at every tier. Only the effort changes with the tier.
+
 | Tier | Claude Code | Codex | All other providers |
 |---|---|---|---|
-| trivial | haiku · low | smallest model · low | smallest model · low |
-| small | sonnet · medium | smallest model · medium | smallest model · medium |
-| medium | sonnet · high | provider default · medium | mid model · medium |
+| trivial | opus · low | provider default · low | largest model · low |
+| small | opus · medium | provider default · medium | largest model · medium |
+| medium | opus · high | provider default · medium | largest model · medium |
 | large | opus · high | provider default · high | largest model · high |
 | xlarge | opus · xhigh | provider default · xhigh | largest model · xhigh |
+
+Why: a demoted lead gives cheap reasoning over expensively gathered context. Keeping one model
+on the thread also stops model switches, so a long thread re-reads its context from cache
+instead of uncached. The saving comes from the sub-agents (see
+[Teams and sub-agents](#teams-and-sub-agents)). Replayed over one user's 30 days of history,
+the main thread cost about 7% more with the lead on Opus, and held turns fell from 164 to 54.
+Sub-agent savings are not in that figure.
+
+### Opt in to a tiered ladder
+
+To run smaller tiers on a cheaper model, set the gears yourself under **Settings → Plugins →
+Gearshift → Routing policy → Gears**. For example, the previous default on Claude Code was:
+
+| Tier | Gear |
+|---|---|
+| trivial | haiku · low |
+| small | sonnet · medium |
+| medium | sonnet · high |
+| large | opus · high |
+| xlarge | opus · xhigh |
+
+For other providers the same idea uses the size words (`@small`, `@medium`, `@large`). A
+ladder makes the main thread cheaper per message but reasons over context it did not gather
+itself, and every model switch re-reads the thread uncached. [Holds](#why-long-threads-hold),
+the cheaper-model downshift under a hold, and the review's lower-gear suggestions apply to
+such ladders. Under the default gears they mostly act on effort only.
+
+If you customised `gears` before this change, your overrides stay as you saved them. Only the
+values you never changed follow the new defaults.
 
 ### Choosing a model
 
@@ -173,7 +219,7 @@ size keeps working when the provider ships a new version.
 
 ## Teams and sub-agents
 
-Beyond picking the model for the message itself, Gearshift can tell the agent which sub-agents to spawn. For a medium or larger message it appends a short agent-only note (the `routeNotes` switch) naming the team for that tier, and the agent starts sub-agents with the `gearshift_spawn` tool. Each role has its own gear per provider and a token budget per tier; Gearshift nudges a sub-agent at 80% of the budget and stops it at 100%, reporting back to the parent thread.
+This is where the gear shift happens. The lead stays on the capable model, plans and synthesizes, and fans the gathering and building out to cheaper roles. For a medium or larger message Gearshift appends a short agent-only note (the `routeNotes` switch) naming the team for that tier, and the agent starts sub-agents with the `gearshift_spawn` tool. The note ends with: "you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself". So the lead starts independent pieces in parallel, one sub-agent per source or area, and does small lookups itself. Each role has its own gear per provider and a token budget per tier; Gearshift nudges a sub-agent at 80% of the budget and stops it at 100%, reporting back to the parent thread.
 
 Default teams:
 
@@ -201,10 +247,17 @@ Default roles on Claude Code (other providers use the size classes `@small`, `@m
 
 | Signal | Adds |
 | --- | --- |
-| research ("research", "compare", "benchmark", "trade-offs") | research |
-| investigation ("flaky", "debug", "root cause", "why is…") | explore |
+| research ("research", "compare", "benchmark", "trade-offs", "synthesize", "high-leverage") | research |
+| investigation ("flaky", "debug", "root cause", "why is…", "look into", "survey", "find out") | explore |
+| breadth ("every", "across", "all the …s") | explore |
 
-The agent can only spawn roles listed in its note: the tier's team plus any signal roles. There is no `lead` role: the lead is the thread itself, and its model is the tier's gear (Gears tab). Add your own roles, or remove default ones, in the Teams tab.
+The route note normally goes on medium and larger messages. It also goes on a **small** message
+when its signals added a fan-out role, so the lead is told to fan out. Example: "Find the default
+terraform tags across all platform-* repos" scores 6 (breadth 3 on an unmatched base of 3; the
+bottom of medium, so it leans to small). The lead stays on Opus · medium, its roles are implement
+and explore, and the note tells it to fan out one explore sub-agent per repo.
+
+The agent can only spawn roles listed in its note: the tier's team plus any signal roles. There is no `lead` role: the lead is the thread itself, and its model is the tier's gear (Gears tab), the capable model by default. Add your own roles, or remove default ones, in the Teams tab.
 
 A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed. [How it works](how-it-works.md#sub-agents) covers the internals: the route note, `gearshift_spawn`, the budget guard and the run report.
 
@@ -238,11 +291,15 @@ Checked in this order; the first that applies decides.
 | 8 | You picked a model by hand, with "A model picked by hand wins" on | keeps your pick |
 | 9 | A continuation ("go ahead") | keeps the thread's current gear |
 | 9b | A borderline score or no clear signal, with "Lean to the lower tier" on | uses the tier below (see [Leaning lower](#leaning-lower-on-borderline-messages)) |
-| 10 | The tier's gear would be a **downshift** and the thread's context is at least the hold threshold (60,000 tokens) | **holds** the current model; the effort follows the message (see below) |
+| 10 | The tier's gear would be a **downshift** and the thread's context is at least the hold threshold (60,000 tokens) | **holds** the current model; the effort follows the message (see below). With the default gears the model is the same at every tier, so this mostly lowers the effort |
 | 11 | Already on the tier's gear | sent as is |
-| 12 | Otherwise | **shifts** to the tier's gear |
+| 12 | Otherwise | **shifts** to the tier's gear (under the default gears, a change of effort) |
 
 ### Why long threads hold
+
+Under the default gears the lead stays on one model, so there is no model switch to avoid and
+this section mostly describes effort. It matters when you opt in to a
+[tiered ladder](#opt-in-to-a-tiered-ladder).
 
 Prompt caches belong to one model. On a thread with a large context, the next turn on a
 different model re-reads the whole context at full input price, so for most replies a model
@@ -257,8 +314,9 @@ keeps the thread's **model**, but every message is still scored on its own:
    costs less even with the context re-read uncached: Gearshift compares the context written
    to the new model's cache plus 2,000 output tokens there, against the context read from the
    current model's cache plus the same output, at list prices (long-context rates included).
-   With the default prices a trivial message on Opus moves to Haiku up to 100k tokens of
-   context, and stays on Opus above that, where Haiku's long-context rates apply.
+   On a ladder with Haiku on the trivial tier and the default prices, a trivial message on Opus
+   moves to Haiku up to 100k tokens of context, and stays on Opus above that, where Haiku's
+   long-context rates apply. Under the default gears there is no cheaper model to move to.
 3. **Continuations keep the whole gear.** "Go ahead" carries on the work the gear was chosen
    for.
 4. **Upshifts always happen**: when a message needs more capability, quality wins.
@@ -293,11 +351,13 @@ you approve, with `bb gearshift policy set|unset|add-pattern|remove-pattern`, ea
 like the editor's Save. Revert any of them in the editor (per-field revert, **Reset all**) or
 with `bb gearshift policy unset <path>`.
 
-**Spend less.** Raise the score bands (for example small 3–6, medium 7–9), or set the
-medium tier to a smaller model or lower effort.
+**Spend less.** Raise the score bands (for example small 3–6, medium 7–9), set a tier to a
+lower effort, or opt in to a tiered ladder by setting a smaller model on the lower tiers (see
+[Opt in to a tiered ladder](#opt-in-to-a-tiered-ladder)). Sub-agent budgets and role models,
+in the Teams tab, set where most of the saving comes from.
 
-**More capability by default.** Lower the bands, or set Claude Code's medium tier to `opus ·
-medium` so investigations get the large model.
+**More capability by default.** Lower the bands, or raise the effort of the medium tier, so
+investigations think harder. The lead is already on the large model at every tier.
 
 **A provider without its own row.** Add a row for its id under Gears; until then it uses
 "All other providers" and size words from its model names.

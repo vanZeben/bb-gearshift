@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { CLAUDE_CATALOG } from "./fixtures";
-import { DEFAULT_POLICY, type Policy } from "./policy";
+import { CLAUDE_CATALOG, TIERED_GEARS } from "./fixtures";
+import { DEFAULT_POLICY, mergePolicy, type Policy } from "./policy";
 import { applyReplaySets, formatReplay, parseReplaySet, replayDecisions, type Replay } from "./replay";
 import type { DecisionRow } from "./store";
 
+// The replay mechanisms (re-tiering, holds, the downshift price check, lower-gear counts) need a different model per
+// tier, so they run on the pre-0.5 tiered ladder; the default ladder has its own block at the bottom.
+const TIERED = mergePolicy(DEFAULT_POLICY, { gears: TIERED_GEARS });
 const NOW = Date.UTC(2026, 10, 20, 12);
 const DAY = 86_400_000;
 const OPUS = "claude-opus-5-5", SONNET = "claude-sonnet-5-5";
@@ -17,10 +20,10 @@ const r = (o: Partial<DecisionRow> = {}): DecisionRow => ({
 });
 const many = (k: number, o: Partial<DecisionRow> | ((i: number) => Partial<DecisionRow>)) => Array.from({ length: k }, (_, i) => r(typeof o === "function" ? o(i) : o));
 const catalogs = { "claude-code": CLAUDE_CATALOG };
-const replay = (rows: DecisionRow[], policy: Policy = DEFAULT_POLICY, extra: { catalogs?: Record<string, typeof CLAUDE_CATALOG | null>; days?: number; edits?: string[] } = {}): Replay =>
+const replay = (rows: DecisionRow[], policy: Policy = TIERED, extra: { catalogs?: Record<string, typeof CLAUDE_CATALOG | null>; days?: number; edits?: string[] } = {}): Replay =>
   replayDecisions(rows, policy, { days: extra.days ?? 30, now: NOW, catalogs: extra.catalogs ?? catalogs, edits: extra.edits });
 const edit = (...sets: string[]): Policy => {
-  const res = applyReplaySets(DEFAULT_POLICY, DEFAULT_POLICY, sets.map((s) => parseReplaySet(s) as { path: string; value: string }));
+  const res = applyReplaySets(TIERED, TIERED, sets.map((s) => parseReplaySet(s) as { path: string; value: string }));
   if ("error" in res) throw new Error(res.error);
   return res.policy;
 };
@@ -59,7 +62,7 @@ describe("re-banding", () => {
     expect(rp.after.tiers.map((t) => t.tier)).toEqual(["large"]);
   });
   it("ignores rows outside the window, join-turn rows and unrouted actions", () => {
-    const rp = replay([r(), r({ at: NOW - 40 * DAY }), r({ attempt: "join-turn", action: "skip", tier: null }), r({ action: "manual", tier: "small" }), r({ action: "skip", tier: null })], DEFAULT_POLICY, { days: 7 });
+    const rp = replay([r(), r({ at: NOW - 40 * DAY }), r({ attempt: "join-turn", action: "skip", tier: null }), r({ action: "manual", tier: "small" }), r({ action: "skip", tier: null })], TIERED, { days: 7 });
     expect(rp.rows).toBe(1);
   });
 });
@@ -115,7 +118,7 @@ describe("holds", () => {
   it("reads the gear a thread was on from rows before the window", () => {
     const rows = [r({ at: NOW - 60 * DAY, routed_model: OPUS, routed_label: "Opus 5.5", routed_effort: "xhigh", tier: "xlarge", score: 13 }),
       r(held({ current_model: null, current_effort: null, action: "shift", hold_kind: null }))];
-    const rp = replay(rows, DEFAULT_POLICY, { days: 7 });
+    const rp = replay(rows, TIERED, { days: 7 });
     expect(rp.rows).toBe(1);
     expect(rp.changes.holdKinds).toEqual({ effort: 1 });
   });
@@ -177,7 +180,7 @@ describe("what cannot be replayed", () => {
 });
 
 describe("applyReplaySets", () => {
-  const apply = (...sets: string[]) => applyReplaySets(DEFAULT_POLICY, DEFAULT_POLICY, sets.map((s) => parseReplaySet(s) as { path: string; value: string }));
+  const apply = (...sets: string[]) => applyReplaySets(TIERED, TIERED, sets.map((s) => parseReplaySet(s) as { path: string; value: string }));
   it("sets the routing switches a replay can try", () => {
     const res = apply("routing.holdAboveTokens=30000", "routing.holdEffortFollowsMessage=off");
     expect("policy" in res && res.policy.routing).toMatchObject({ holdAboveTokens: 30000, holdEffortFollowsMessage: false });
@@ -206,9 +209,9 @@ describe("applyReplaySets", () => {
     expect(apply("tiers.small.max=abc")).toEqual({ error: expect.stringMatching(/takes a number/) });
   });
   it("does not change the policy it was given", () => {
-    const before = JSON.stringify(DEFAULT_POLICY);
+    const before = JSON.stringify(TIERED);
     apply("routing.holdAboveTokens=1", "tiers.small.max=3");
-    expect(JSON.stringify(DEFAULT_POLICY)).toBe(before);
+    expect(JSON.stringify(TIERED)).toBe(before);
   });
 });
 
@@ -251,7 +254,7 @@ describe("formatReplay", () => {
 });
 
 describe("downshift bias", () => {
-  const T = DEFAULT_POLICY.tiers;
+  const T = TIERED.tiers;
   const off = (): Policy => edit("routing.downshiftBias=false");
   /** A large message at the bottom of its band, recorded before the bias existed (tier = scored tier). */
   const bottom = (o: Partial<DecisionRow> = {}) => r({ tier: "large", score: T.large.min, confidence: "high", routed_model: OPUS, routed_label: "Opus 5.5", routed_effort: "high", ...o });

@@ -15,6 +15,11 @@ describe("worked examples (docs/DESIGN.md)", () => {
     ["why is the dashboard slow?", 4, "small", "exact"],
     ["research which models are good for which tasks", 6, "medium", "exact"],
     ["the login is flaky", 8, "medium", "exact"],
+    // 9 is the bottom of large: the downshift bias routes both of these as medium, but they score large.
+    ["Look into what's slowing the team down and synthesize it", 9, "large", "exact"],
+    ["Investigate a high-leverage area for me to work on", 9, "large", "exact"],
+    // 6 is the bottom of medium: routed as small, with explore added by the breadth signal.
+    ["Find the default terraform tags across all platform-* repos", 6, "medium", "exact"],
     ["delete the old migration files", 5, "small", "exact"],
     ["port the billing service into a plugin", 9, "large", "min"],
     ["build a plugin with a composer toggle, an analytics page and a settings editor, with tests and a PR", 12, "xlarge", "min"],
@@ -31,6 +36,20 @@ describe("worked examples (docs/DESIGN.md)", () => {
     const r = c("the login is flaky");
     expect(r.contributions.map((x) => [x.id, x.kind, x.value])).toEqual([["unmatched", "base", 3], ["investigation", "add", 3], ["risk", "add", 2]]);
     expect(r.confidence).toBe("medium"); // 8 sits on the medium band edge
+  });
+});
+
+describe("look-into, survey and synthesis patterns", () => {
+  it("'look into' and 'synthesize' score investigation 3 + research floor 6", () => {
+    const r = c("Look into what's slowing the team down and synthesize it");
+    expect(r.contributions.map((x) => [x.id, x.kind, x.value, x.match])).toEqual([["research", "floor", 6, "synthesize"], ["investigation", "add", 3, "Look into"]]);
+  });
+  it("'high-leverage' is a research signal", () => {
+    const r = c("Investigate a high-leverage area for me to work on");
+    expect(r.contributions.map((x) => [x.id, x.kind, x.value, x.match])).toEqual([["research", "floor", 6, "high-leverage"], ["investigation", "add", 3, "Investigate"]]);
+  });
+  it.each(["look into the login", "looking into the login", "dig into the logs", "digging into the logs", "survey the repos", "find out why", "synthesise the notes", "a high leverage area"])("matches %s", (t) => {
+    expect(c(t).signals.some((id) => id === "investigation" || id === "research")).toBe(true);
   });
 });
 
