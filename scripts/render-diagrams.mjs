@@ -89,7 +89,7 @@ function routing() {
     steer: { x: 750, y: R1, w: bw, h: bh, kind: "decision", label: "A steer, retry or\nsystem message?" },
     named: { x: 1050, y: R1, w: bw, h: bh, kind: "decision", label: "Names a model, or\npicked by hand?" },
     score: { x: 1050, y: R2, w: bw, h: bh, label: "Score 0–14 from local\nrules → tier" },
-    gear: { x: 750, y: R2, w: bw, h: bh, label: "The tier's gear for this\nprovider: model · effort" },
+    gear: { x: 750, y: R2, w: bw, h: bh, label: "The tier's gear: same\nmodel, effort by tier" },
     hold: { x: 450, y: R2, w: bw, h: bh, kind: "decision", label: "A downshift on a\nlong thread?" },
     same: { x: 150, y: R2, w: bw, h: bh, kind: "decision", label: "Already on\nthat gear?" },
     asIs1: { x: 450, y: 92, w: 150, h: 40, kind: "pill", label: "Sent as is" },
@@ -186,9 +186,9 @@ function architecture() {
 function sequence() {
   const actors = [["You", 120], ["bb server", 420], ["Gearshift", 760], ["Provider", 1120]];
   const steps = [
-    [0, 1, "send “port the billing service into a plugin”"],
-    [1, 2, "message.dispatch (requested: Sonnet · high)"],
-    [2, 2, "score 9 → large → Opus · high"],
+    [0, 1, "send “port the auth service into a plugin”"],
+    [1, 2, "message.dispatch (requested: Opus · medium)"],
+    [2, 2, "score 11 → large → Opus · high"],
     [2, 1, "wait (“Shifting to Opus 5.5 · high”)", "ret"],
     [1, 1, "store the message as a queued row"],
     [1, 2, "message.queued (row id)", "async"],
@@ -217,7 +217,7 @@ function sequence() {
     }
   });
   return doc(W, H, "Shifting a message",
-    "You send a message. bb asks Gearshift's dispatch hook, which scores it as large and picks Opus at high effort, so it answers wait. bb stores the message as a queued row and announces it. Gearshift links the row to its decision, sets the row's model and effort, and asks bb to recheck. bb re-asks the hook, Gearshift answers proceed, and bb starts the turn on Opus.",
+    "You send a message. bb asks Gearshift's dispatch hook, which scores it as large and raises the effort to high on Opus, so it answers wait. bb stores the message as a queued row and announces it. Gearshift links the row to its decision, sets the row's model and effort, and asks bb to recheck. bb re-asks the hook, Gearshift answers proceed, and bb starts the turn on Opus.",
     parts.join("\n"));
 }
 
@@ -250,11 +250,11 @@ function analytics() {
 function subagents() {
   const W = 1280, H = 580, R1 = 130, R2 = 330, R3 = 490, bw = 230, bh = 74;
   const n = {
-    send: { x: 150, y: R1, w: bw, h: bh, kind: "pill", label: "You send a medium\nor larger message" },
+    send: { x: 150, y: R1, w: bw, h: bh, kind: "pill", label: "Medium or larger, or\nsignals add a role" },
     note: { x: 450, y: R1, w: bw, h: bh, label: "Route note appended\n(agent-only): team,\ngears, budgets" },
-    lead: { x: 750, y: R1, w: bw, h: bh, label: "Lead agent,\non the tier's gear" },
+    lead: { x: 750, y: R1, w: bw, h: bh, label: "Lead stays on its\ncapable model: plans,\nsynthesizes" },
     spawn: { x: 1050, y: R1, w: bw, h: bh, kind: "decision", label: "gearshift_spawn\nrole · prompt · title" },
-    kids: { x: 1050, y: R2, w: bw, h: 96, label: "Child threads, one per role\nimplement · qa · review\non the role's gear" },
+    kids: { x: 1050, y: R2, w: bw, h: 96, label: "Cheaper child threads,\none per source or area:\nexplore · research ·\nimplement · qa · review" },
     guard: { x: 750, y: R2, w: bw, h: bh, kind: "decision", label: "Budget guard reads\nspend about every second" },
     report: { x: 450, y: R2, w: bw, h: bh, kind: "accent", label: "At 100%: stop the child\nand report to the lead" },
     nudge: { x: 750, y: R3, w: bw, h: bh, label: "At 80%: nudge once,\n\"report done vs left\"" },
@@ -272,7 +272,7 @@ function subagents() {
   const body = [heading(48, 44, "Sub-agents"), ...e, ...Object.values(n).map(node),
     `    <text x="1232" y="552" font-size="12" fill="${C.faint}" text-anchor="end">A child can run on another provider. A child that finishes under budget reports back on its own.</text>`].join("\n");
   return doc(W, H, "How Gearshift orchestrates sub-agents",
-    "You send a medium or larger message. Gearshift appends an agent-only route note naming the team, each role's gear and its budget. The lead agent, on the tier's gear, starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread, which finishes the work or spawns again.",
+    "You send a medium or larger message, or one whose signals add a fan-out role. Gearshift appends an agent-only route note naming the team, each role's gear and its budget, and telling the lead to stay on its gear and fan out. The lead stays on its capable model, plans and synthesizes, and starts cheaper sub-agents with the gearshift_spawn tool, one per source or area. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread, which finishes the work or spawns again.",
     body);
 }
 
