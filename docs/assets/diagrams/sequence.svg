@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="678" viewBox="0 0 1280 678" role="img" aria-labelledby="t d">
   <title id="t">Shifting a message</title>
-  <desc id="d">You send a message. bb asks Gearshift's dispatch hook, which scores it as large and picks Opus at high effort, so it answers wait. bb stores the message as a queued row and announces it. Gearshift links the row to its decision, sets the row's model and effort, and asks bb to recheck. bb re-asks the hook, Gearshift answers proceed, and bb starts the turn on Opus.</desc>
+  <desc id="d">You send a message. bb asks Gearshift's dispatch hook, which scores it as large and raises the effort to high on Opus, so it answers wait. bb stores the message as a queued row and announces it. Gearshift links the row to its decision, sets the row's model and effort, and asks bb to recheck. bb re-asks the hook, Gearshift answers proceed, and bb starts the turn on Opus.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0b0f17"/><stop offset="1" stop-color="#171d29"/></linearGradient>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#56606d"/></marker>
@@ -21,11 +21,11 @@
     <line x1="1120" y1="114" x2="1120" y2="648" stroke="#2a313c" stroke-width="2" stroke-dasharray="4 6"/>
     <rect x="1040" y="70" width="160" height="44" rx="12" fill="#1c2330" stroke="#2f3846"/>
     <text x="1120" y="97.4" font-size="15" font-weight="600" fill="#e6edf3" text-anchor="middle">Provider</text>
-    <text x="270" y="146" font-size="13.5" fill="#e6edf3" text-anchor="middle"><tspan fill="#6e7681">1  </tspan>send “port the billing service into a plugin”</text>
+    <text x="270" y="146" font-size="13.5" fill="#e6edf3" text-anchor="middle"><tspan fill="#6e7681">1  </tspan>send “port the auth service into a plugin”</text>
     <path d="M124 154 L414 154" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
-    <text x="590" y="192" font-size="13.5" fill="#e6edf3" text-anchor="middle"><tspan fill="#6e7681">2  </tspan>message.dispatch (requested: Sonnet · high)</text>
+    <text x="590" y="192" font-size="13.5" fill="#e6edf3" text-anchor="middle"><tspan fill="#6e7681">2  </tspan>message.dispatch (requested: Opus · medium)</text>
     <path d="M424 200 L754 200" fill="none" stroke="#56606d" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>
-    <text x="784" y="238" font-size="13.5" fill="#e6edf3" text-anchor="start"><tspan fill="#6e7681">3  </tspan>score 9 → large → Opus · high</text>
+    <text x="784" y="238" font-size="13.5" fill="#e6edf3" text-anchor="start"><tspan fill="#6e7681">3  </tspan>score 11 → large → Opus · high</text>
     <path d="M760 246 h18 v14 h-14" fill="none" stroke="#56606d" stroke-width="2" marker-end="url(#arrow)"/>
     <text x="590" y="284" font-size="13.5" fill="#e6edf3" text-anchor="middle"><tspan fill="#6e7681">4  </tspan>wait (“Shifting to Opus 5.5 · high”)</text>
     <path d="M756 292 L426 292" fill="none" stroke="#56606d" stroke-width="2" stroke-dasharray="6 5" stroke-linejoin="round" marker-end="url(#arrow)"/>

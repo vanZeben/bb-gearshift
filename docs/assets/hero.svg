@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="600" viewBox="0 0 1280 600" role="img" aria-labelledby="t d">
   <title id="t">Gearshift</title>
-  <desc id="d">Automatic model routing for bb. Five example messages and where Gearshift sends them: "thanks!" to Haiku at low effort, "fix the typo in the README" to Sonnet at medium, "the login is flaky" to Sonnet at high, "port the billing service into a plugin" to Opus at high, and "build a plugin: UI, API, data, tests and a PR" to Opus at extra-high effort.</desc>
+  <desc id="d">Gearshift for bb: the lead stays on a capable model and the gear shift happens in sub-agents. Five example messages: "thanks!" runs on Opus at low effort and answers itself; "check tags across all platform-* repos" on Opus at medium with one explore sub-agent per repo; "survey our flaky tests and synthesize" on Opus at high with explore and research; "port the auth service into a plugin" on Opus at high with implement, qa and review; "build a plugin: UI, API, tests and a PR" on Opus at extra-high effort with architecture first.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0b0f17"/>
@@ -25,8 +25,8 @@
     </g>
 
     <text x="78" y="330" font-size="76" font-weight="700" fill="#f0f3f6" letter-spacing="-1.5">Gearshift</text>
-    <text x="80" y="382" font-size="28" fill="#c9d1d9">Every message on the right model.</text>
-    <text x="80" y="424" font-size="18" fill="#8b949e">Automatic model routing for bb, on any provider.</text>
+    <text x="80" y="382" font-size="28" fill="#c9d1d9">A capable lead, cheap fan-out.</text>
+    <text x="80" y="424" font-size="18" fill="#8b949e">Effort per message, fan-out per source.</text>
 
     <g font-size="15" fill="#c9d1d9">
       <rect x="80" y="462" width="138" height="34" rx="17" fill="#1f2632" stroke="#30363d"/>
@@ -40,60 +40,50 @@
     <!-- Routing panel -->
     <rect x="600" y="70" width="620" height="460" rx="18" fill="#121823" stroke="#2a313c"/>
     <text x="632" y="112" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">YOU SEND</text>
-    <text x="1016" y="112" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">IT RUNS ON</text>
+    <text x="1028" y="112" font-size="13" font-weight="600" fill="#8b949e" letter-spacing="1.6">LEAD · FAN-OUT</text>
 
-    <!-- row helper: bubble at x=632, arrow, tier label + chip at x=1040 -->
-    <g font-size="15">
+    <g font-size="14">
       <!-- 1 trivial -->
-      <rect x="632" y="134" width="330" height="50" rx="12" fill="#1c2330"/>
-      <text x="652" y="165" fill="#e6edf3">thanks!</text>
-      <path d="M974 159h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="1016" y="150" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">TRIVIAL · 0</text>
-      <g transform="translate(1016 160)">
-        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
-      </g>
-      <text x="1082" y="175" fill="#e6edf3" font-weight="600">Haiku · low</text>
-
+      <rect x="632" y="134" width="350" height="50" rx="12" fill="#1c2330"/>
+      <text x="650" y="164" fill="#e6edf3">thanks!</text>
+      <path d="M992 159h22m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1028" y="146" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">TRIVIAL · 0</text>
+      <g transform="translate(1028 152)"><rect width="10" height="4" rx="2" x="0" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/></g>
+      <text x="1094" y="167" fill="#e6edf3" font-weight="600">Opus · low</text>
+      <text x="1028" y="184" font-size="11" fill="#8b949e">answers itself</text>
       <!-- 2 small -->
-      <rect x="632" y="210" width="330" height="50" rx="12" fill="#1c2330"/>
-      <text x="652" y="241" fill="#e6edf3">fix the typo in the README</text>
-      <path d="M974 235h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="1016" y="226" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">SMALL · 3</text>
-      <g transform="translate(1016 236)">
-        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
-      </g>
-      <text x="1082" y="251" fill="#e6edf3" font-weight="600">Sonnet · medium</text>
-
+      <rect x="632" y="210" width="350" height="50" rx="12" fill="#1c2330"/>
+      <text x="650" y="240" fill="#e6edf3">check tags across all platform-* repos</text>
+      <path d="M992 235h22m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1028" y="222" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">SMALL · 6</text>
+      <g transform="translate(1028 228)"><rect width="10" height="4" rx="2" x="0" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/></g>
+      <text x="1094" y="243" fill="#e6edf3" font-weight="600">Opus · medium</text>
+      <text x="1028" y="260" font-size="11" fill="#8b949e">+ explore, one per repo</text>
       <!-- 3 medium -->
-      <rect x="632" y="286" width="330" height="50" rx="12" fill="#1c2330"/>
-      <text x="652" y="317" fill="#e6edf3">the login is flaky</text>
-      <path d="M974 311h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="1016" y="302" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">MEDIUM · 8</text>
-      <g transform="translate(1016 312)">
-        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
-      </g>
-      <text x="1082" y="327" fill="#e6edf3" font-weight="600">Sonnet · high</text>
-
+      <rect x="632" y="286" width="350" height="50" rx="12" fill="#1c2330"/>
+      <text x="650" y="316" fill="#e6edf3">survey our flaky tests and synthesize</text>
+      <path d="M992 311h22m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1028" y="298" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">MEDIUM · 9</text>
+      <g transform="translate(1028 304)"><rect width="10" height="4" rx="2" x="0" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#30363d"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/></g>
+      <text x="1094" y="319" fill="#e6edf3" font-weight="600">Opus · high</text>
+      <text x="1028" y="336" font-size="11" fill="#8b949e">+ explore · research</text>
       <!-- 4 large -->
-      <rect x="632" y="362" width="330" height="50" rx="12" fill="#1c2330"/>
-      <text x="652" y="393" fill="#e6edf3">port the billing service into a plugin</text>
-      <path d="M974 387h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="1016" y="378" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">LARGE · 9</text>
-      <g transform="translate(1016 388)">
-        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/>
-      </g>
-      <text x="1082" y="403" fill="#e6edf3" font-weight="600">Opus · high</text>
-
+      <rect x="632" y="362" width="350" height="50" rx="12" fill="#1c2330"/>
+      <text x="650" y="392" fill="#e6edf3">port the auth service into a plugin</text>
+      <path d="M992 387h22m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1028" y="374" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">LARGE · 11</text>
+      <g transform="translate(1028 380)"><rect width="10" height="4" rx="2" x="0" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#30363d"/></g>
+      <text x="1094" y="395" fill="#e6edf3" font-weight="600">Opus · high</text>
+      <text x="1028" y="412" font-size="11" fill="#8b949e">+ implement · qa · review</text>
       <!-- 5 xlarge -->
-      <rect x="632" y="438" width="330" height="50" rx="12" fill="#1c2330"/>
-      <text x="652" y="469" fill="#e6edf3">build a plugin: UI, API, tests and a PR</text>
-      <path d="M974 463h28m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-      <text x="1016" y="454" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">XLARGE · 14</text>
-      <g transform="translate(1016 464)">
-        <rect width="10" height="4" rx="2" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#f5b041"/>
-      </g>
-      <text x="1082" y="479" fill="#e6edf3" font-weight="600">Opus · xhigh</text>
+      <rect x="632" y="438" width="350" height="50" rx="12" fill="#1c2330"/>
+      <text x="650" y="468" fill="#e6edf3">build a plugin: UI, API, tests and a PR</text>
+      <path d="M992 463h22m-7-6 7 6-7 6" stroke="#4b5563" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="1028" y="450" font-size="11" font-weight="600" fill="#8b949e" letter-spacing="1.2">XLARGE · 14</text>
+      <g transform="translate(1028 456)"><rect width="10" height="4" rx="2" x="0" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="12" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="24" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="36" y="10" fill="#f5b041"/><rect width="10" height="4" rx="2" x="48" y="10" fill="#f5b041"/></g>
+      <text x="1094" y="471" fill="#e6edf3" font-weight="600">Opus · xhigh</text>
+      <text x="1028" y="488" font-size="11" fill="#8b949e">+ architecture first</text>
     </g>
-    <text x="632" y="514" font-size="12" fill="#6e7681">Claude Code defaults. Every gear, signal and band is configurable.</text>
+    <text x="632" y="520" font-size="12" fill="#6e7681">Claude Code defaults. Every gear and signal is configurable.</text>
   </g>
 </svg>

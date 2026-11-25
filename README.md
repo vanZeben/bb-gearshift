@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="Gearshift: every message on the right model. Five example messages and the model each one runs on, from Haiku at low effort for 'thanks!' to Opus at extra-high effort for a multi-part build." width="100%">
+  <img src="docs/assets/hero.svg" alt="Gearshift: a capable lead, cheap fan-out. Five example messages: each runs on Opus at the effort its size needs, and larger or broader ones fan out to cheaper sub-agents such as explore, research, implement, qa and review." width="100%">
 </p>
 
 <p align="center">
