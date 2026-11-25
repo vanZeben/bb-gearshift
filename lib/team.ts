@@ -7,8 +7,17 @@ import type { Usage } from "./pricing";
 export const NUDGE_AT = 0.8;
 export const STOP_AT = 1;
 const AT_LEAST_MEDIUM = new Set<Tier>(["medium", "large", "xlarge"]);
-export const noteWorthy = (tier: Tier | null): boolean => !!tier && AT_LEAST_MEDIUM.has(tier);
+/** A route note goes on medium-or-larger messages, and on any message whose signals added a fan-out role. */
+export const noteWorthy = (tier: Tier | null, signalRoleCount = 0): boolean => !!tier && (AT_LEAST_MEDIUM.has(tier) || signalRoleCount > 0);
+/** The roles a message's signals add to its tier's team (the team's own roles excluded). */
+export const signalRolesFor = (policy: Policy, tier: Tier, contributionIds: readonly string[]): string[] =>
+  teamRoles(policy, tier, contributionIds).slice(policy.teams[tier].roles.length);
 export const NOTE_PREFIX = "[gearshift]";
+/**
+ * The operating model the note hands the agent: the lead keeps its capable gear to plan and synthesize, and the
+ * saving comes from fanning the gathering and building out to cheaper roles, not from the lead running cheap.
+ */
+export const LEAD_INSTRUCTION = "you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself";
 
 /** Spend tokens: input + cache writes + output + 0.1 x cache reads. */
 export function spendTokens(u: Usage): number {
@@ -68,7 +77,7 @@ export function formatRouteNote(a: { tier: Tier; score: number | null; signalIds
   }).filter((x): x is string => !!x);
   const parts = [`${NOTE_PREFIX} tier=${a.tier}`, `score=${a.score ?? "?"}`, `team: ${team.summary}`];
   if (roles.length) parts.push(`roles: ${roles.join(", ")}`);
-  parts.push("spawn sub-agents with the gearshift_spawn tool");
+  parts.push(LEAD_INSTRUCTION);
   return parts.join(" · ");
 }
 

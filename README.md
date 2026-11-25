@@ -20,18 +20,18 @@
 
 ---
 
-**Gearshift is a [bb](https://getbb.app) plugin that runs every message on the model and reasoning effort its size calls for.**
+**Gearshift is a [bb](https://getbb.app) plugin that keeps your thread on the capable model and sends the gathering and building to cheaper sub-agents.**
 
-A "thanks" doesn't need the top model at maximum effort, and a multi-file refactor shouldn't run on the smallest one. Gearshift reads each message as you send it, scores how much work it asks for, and shifts the thread to the gear that fits: a small, fast model for quick asks, the top model with more thinking for big builds. You see the gear before you send, and you can turn it off for any thread.
+A "thanks" doesn't need maximum effort, and a multi-file refactor shouldn't be done by one model reading everything itself. Gearshift reads each message as you send it, scores how much work it asks for, and sets the reasoning effort that fits. The lead (the main thread) stays on the capable model at every size: it plans and synthesizes. The gear shift happens in the sub-agents it starts for the gathering and building, each on a cheaper model that fits its role. You see the gear before you send, and you can turn it off for any thread.
 
-It also orchestrates. For a medium or larger message, Gearshift tells the agent which sub-agents to start (an implementer on a mid model, QA on a small one, a review on the top one), starts them on those models, and caps what each can spend. See [Sub-agents](#sub-agents).
+For a medium or larger message, Gearshift tells the agent which sub-agents to start (explore on a small model, research and implementation on a mid model, a review on the top one), starts them on those models, and caps what each can spend. See [Sub-agents](#sub-agents).
 
 ## Why Gearshift
 
-- **Pay for the work, not the habit.** Most messages in a coding session are follow-ups, acknowledgements and small fixes. Gearshift sends them to a cheaper gear and saves the top model for the work that needs it.
-- **Orchestrates sub-agents.** Medium and larger messages come with a team: implementers, QA, review, even on another provider. Each sub-agent runs on its role's model with a token budget, and Gearshift stops it at the limit. Big work gets split across the right models instead of running on one.
-- **Never wastes your cache.** Prompt caches belong to one model. Moving a long thread to a cheaper model makes it re-read its whole context uncached, which can cost more than the reply saves. Gearshift holds long threads on their current model and only shifts them up, while each message still gets its own effort: a "thanks" on a long Opus thread runs on Opus at low effort.
-- **Works on every provider.** Built-in gears for Claude Code and Codex, and size-based gears for Pi, ACP agents and any other provider. Gears follow the provider's live model list, so new model releases are picked up without an update.
+- **Pay for the work, not the habit.** A lead on a cheap model gives cheap reasoning over context that was expensive to gather. Gearshift keeps the lead capable and moves the gathering and building to cheaper sub-agents. Follow-ups and acknowledgements run at low effort instead of full thinking.
+- **Orchestrates sub-agents.** Medium and larger messages come with a team: explore, research, implementers, QA, review, even on another provider. Each sub-agent runs on its role's model with a token budget, and Gearshift stops it at the limit. Big work gets split across the right models instead of running on one.
+- **Never wastes your cache.** Prompt caches belong to one model. Moving a long thread to a cheaper model makes it re-read its whole context uncached, which can cost more than the reply saves. With one model on the thread, Gearshift has no switch to make: a long thread keeps reading its context from cache, and each message still gets its own effort. Measured on one user's 30 days of history, main-thread cost came to about +7% with the lead on Opus, and held turns fell from 164 to 54. Sub-agent savings are not in that figure.
+- **Works on every provider.** Built-in gears for Claude Code and Codex, and size-based gears for Pi, ACP agents and any other provider. Gears follow the provider's live model list, so new model releases are picked up without an update. A tiered ladder with a different model per tier is still available as an opt-in.
 - **No extra model call.** Scoring is a handful of local rules: well under a millisecond, nothing sent anywhere, no hidden classification turn.
 - **You stay in charge.** Pick a model by hand and that message keeps it. Write "use opus" in a message and it runs there. Every rule, signal and gear is a setting.
 - **See what it did.** The composer shows where your draft will run and why. An analytics page shows every decision, the model mix, and the estimated savings.
@@ -41,33 +41,35 @@ It also orchestrates. For a medium or larger message, Gearshift tells the agent 
 <p align="center"><img src="docs/assets/diagrams/routing.svg" width="100%" alt="How Gearshift routes a message. If Gearshift is off for the thread, or the message is a steer, retry or system message, it is sent as is. A message that names a model, or whose model was picked by hand, runs on that model. Otherwise the text is scored 0 to 14 with local rules, the tier picks a gear for the provider, a downshift on a long thread keeps the current model at the message's own effort, a message already on that gear is sent as is, and otherwise Gearshift shifts, then sends."></p>
 
 
-A shift takes about a tenth of a second: bb holds the message for a moment, Gearshift sets its model and effort, and bb sends it on. If anything goes wrong, or a lookup takes longer than 1.5 seconds, the message goes through unchanged. [How it works](docs/how-it-works.md) has the details.
+A shift takes about a tenth of a second: bb holds the message for a moment, Gearshift sets its effort (and its model, if you configured a tiered ladder), and bb sends it on. If anything goes wrong, or a lookup takes longer than 1.5 seconds, the message goes through unchanged. [How it works](docs/how-it-works.md) has the details.
 
 ### Default gears
 
+The lead stays on the capable model at every tier. The tier sets the lead's effort and the team of sub-agent roles it can start.
+
 | Score | Tier | Example | Claude Code | Codex | Any other provider |
 |---|---|---|---|---|---|
-| 0–2 | trivial | "thanks!", "how does the queue work?" | Haiku · low | small model · low | small model · low |
-| 3–5 | small | "fix the typo in the README" | Sonnet · medium | small model · medium | small model · medium |
-| 6–8 | medium | "the login is flaky" | Sonnet · high | default model · medium | mid model · medium |
+| 0–2 | trivial | "thanks!", "how does the queue work?" | Opus · low | default model · low | large model · low |
+| 3–5 | small | "fix the typo in the README" | Opus · medium | default model · medium | large model · medium |
+| 6–8 | medium | "the login is flaky" | Opus · high | default model · medium | large model · medium |
 | 9–11 | large | "port the billing service into a plugin" | Opus · high | default model · high | large model · high |
 | 12–14 | xlarge | "build a plugin: UI, API, tests and a PR" | Opus · xhigh | default model · xhigh | large model · xhigh |
 
-"Small", "mid" and "large" are read from model names (`haiku`, `mini`, `flash`, `lite` are small; `opus`, `pro`, `ultra`, `max` are large), and the provider's default model is the mid gear. [The routing policy guide](docs/routing-policy.md) explains every signal behind the score and how to change it.
+"Large" is read from model names (`opus`, `pro`, `ultra`, `max` are large), and the provider's default model is Codex's gear. A tiered ladder, with a cheaper model on the smaller tiers, is opt-in: set it in **Settings → Plugins → Gearshift → Routing policy → Gears**. [The routing policy guide](docs/routing-policy.md) explains every signal behind the score and how to change it.
 
 ## Sub-agents
 
-Routing picks the model for the message you send. Orchestration picks the models for the work that message turns into. For medium and larger messages, Gearshift lets the agent split the work across sub-agents, each on the gear its role needs.
+Routing sets the effort for the message you send. Orchestration is where the gear shift happens: the lead stays on the capable model, plans and synthesizes, and fans the work that message turns into out to sub-agents, each on the gear its role needs. For medium and larger messages, Gearshift lets the agent split the work this way.
 
 <p align="center"><img src="docs/assets/diagrams/subagents.svg" width="100%" alt="How Gearshift orchestrates sub-agents. A medium or larger message gets an agent-only route note naming the team, each role's gear and its budget. The lead agent starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear. The budget guard reads each child's token usage, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread."></p>
 
 **What the agent sees.** A short note on the message, invisible in the chat, for example:
 
 ```text
-[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → Opus 5.5 · medium (budget 300k) · spawn sub-agents with the gearshift_spawn tool
+[gearshift] tier=large · score=10 · team: implementers; qa; review of the diff · roles: implement → Sonnet 5.5 · high (budget 700k), qa → Haiku 5.5 · low (budget 150k), review → Opus 5.5 · medium (budget 300k) · you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself
 ```
 
-The agent starts a sub-agent with the `gearshift_spawn` tool: a role, a prompt and an optional title. Gearshift creates a child thread on that role's model, effort and service tier, and the child reports back to the lead when it finishes. The agent can only spawn the roles in its note: the tier's team, plus research (on a research signal such as "compare" or "benchmark") and explore (on an investigation signal such as "flaky" or "root cause"). Sub-agents keep the gear they were given and are never re-routed.
+The agent is the lead. It plans and synthesizes on its own gear, starts independent sub-agents in parallel (one per source or area) for the gathering and building, and does small lookups itself. It starts a sub-agent with the `gearshift_spawn` tool: a role, a prompt and an optional title. Gearshift creates a child thread on that role's model, effort and service tier, and the child reports back to the lead when it finishes. The agent can only spawn the roles in its note: the tier's team, plus research (on a research signal such as "compare" or "benchmark") and explore (on an investigation signal such as "flaky" or "root cause"). Sub-agents keep the gear they were given and are never re-routed.
 
 **Default teams.**
 
@@ -105,7 +107,7 @@ Gearshift needs bb 0.50 or later. It has no account, API key or external service
 
 ## Quick start
 
-1. **Send a message in any thread.** The gear pill next to the send button shows where it will run, for example `Auto · Sonnet 5.5 · High`, and updates as you type.
+1. **Send a message in any thread.** The gear pill next to the send button shows where it will run, for example `Auto · Opus 5.5 · High`, and updates as you type.
 2. **Click the pill** to see why: the score, the signals that matched, and the last shift. The switch there turns Gearshift off for that thread.
 3. **Open Gearshift in the sidebar** for the analytics page: messages routed, shift rate, tier and model mix, daily cost against always using the top gear, and recent decisions. **Improve my rules** in its header opens a new thread with a review prompt: an agent reads your routing history, judges whether each gear fit, and proposes changes you approve one by one.
 4. **Try orchestration.** Send a medium or larger task, such as "port the billing service into a plugin". The agent gets a team note and can start sub-agents. Open **Gearshift** in the sidebar and look at the **Sub-agents** card for their spend, and at the **Teams** tab in the policy editor to change who runs on what.
@@ -121,7 +123,7 @@ Everything is an ordinary setting in **Settings → Plugins → Gearshift**. The
 | Start new threads with Gearshift on | on | Turn this off to route only the threads you switch on yourself. |
 | A model picked by hand wins | on | If you change the model picker before sending, that message keeps your choice. |
 | Route messages from other agents | on | Also route messages that other agents send into a thread. |
-| Don't downshift above this many context tokens | 60,000 | Keeps long threads on their current model so their cache isn't wasted. 0 turns this off. |
+| Don't downshift above this many context tokens | 60,000 | Keeps long threads on their current model so their cache isn't wasted. Matters for a tiered ladder; under the default gears the model is the same at every tier. 0 turns this off. |
 | Add a team note to medium and larger messages | on | Tells the agent which sub-agent roles to spawn and on what. Off means no orchestration prompts. |
 | Days of history kept | 90 | Routing history used by the analytics page. |
 
@@ -155,19 +157,19 @@ bb plugin config gearshift set defaultOn false    # change a setting
 <details>
 <summary><b>Does it cost anything, or need an API key?</b></summary>
 
-No. Gearshift is free and open source, and it runs inside your bb server with no account or key. It only chooses which of your provider's models a message runs on.
+No. Gearshift is free and open source, and it runs inside your bb server with no account or key. It only sets the effort of your messages and which of your provider's models its sub-agents run on.
 </details>
 
 <details>
 <summary><b>I'm on a subscription plan. Does it still help?</b></summary>
 
-Yes. A smaller model and lower effort use less of your plan's limits and usually answer sooner. The cost figures on the analytics page are estimates at public API list prices, so on a subscription read them as relative cost, not as your bill.
+Yes. Sub-agents on smaller models and lower effort use less of your plan's limits and usually answer sooner. The cost figures on the analytics page are estimates at public API list prices, so on a subscription read them as relative cost, not as your bill.
 </details>
 
 <details>
 <summary><b>Will switching models break my prompt cache?</b></summary>
 
-Gearshift is built around that. Caches belong to one model, and on Anthropic models changing the effort mid-conversation can invalidate the message cache too. So Gearshift never moves a thread whose context is above 60,000 tokens (configurable) down to a cheaper gear. It only shifts long threads up, when a message needs more capability.
+By default there is nothing to break: the lead stays on one model, so the thread keeps reading its context from cache. Caches belong to one model, and on Anthropic models changing the effort mid-conversation can invalidate the message cache too. If you configure a tiered ladder, Gearshift never moves a thread whose context is above 60,000 tokens (configurable) down to a cheaper gear. It only shifts long threads up, when a message needs more capability.
 </details>
 
 <details>
@@ -185,13 +187,13 @@ No. Scoring happens locally in the bb server. Gearshift stores each decision's m
 <details>
 <summary><b>How is this different from a router that asks a model to classify the task?</b></summary>
 
-There's no extra model call: no added latency, no tokens spent deciding, and nothing leaves your machine. Gearshift decides per message rather than once per thread, and it knows about prompt caches. The trade-off is that rules are simpler than a model's judgment, which is why every signal is visible and editable.
+There's no extra model call: no added latency, no tokens spent deciding, and nothing leaves your machine. Gearshift decides per message rather than once per thread, keeps the lead on one model so prompt caches survive, and saves by sending the gathering and building to cheaper sub-agents. The trade-off is that rules are simpler than a model's judgment, which is why every signal is visible and editable.
 </details>
 
 <details>
 <summary><b>Can it move a thread to a different provider?</b></summary>
 
-No. bb fixes a thread's provider when the thread starts, so Gearshift shifts between that provider's models.
+No. bb fixes a thread's provider when the thread starts, so Gearshift works with that provider's models. A sub-agent role can run on another provider.
 </details>
 
 <details>

@@ -29,6 +29,11 @@ RPC handlers, the settings and the CLI, and does the I/O.
 
 ## Shifting a message
 
+Under the default policy the lead (the main thread) stays on the capable model at every tier,
+so a "shift" is usually a change of effort, and the model change happens in the sub-agents the
+lead starts ([Sub-agents](#sub-agents)). The steps below also carry a model change, which is what
+a tiered ladder (opt-in, under Settings → Plugins → Gearshift → Routing policy → Gears) needs.
+
 bb asks every plugin hook about each message before it reaches a provider
 (`bb.experimental_hooks.on("message.dispatch")`). A hook can answer `proceed`, `wait` or
 `reject`, but it can't edit the message. Gearshift therefore shifts gears in three steps:
@@ -45,7 +50,9 @@ bb asks every plugin hook about each message before it reaches a provider
   decision that created it (`queued_links`, filled from the `message.queued` event) and
   answers `proceed` for any linked row. A model you picked by hand therefore survives a
   queue wait, and two identical messages still make two decisions.
-- **Long threads hold their model, not their effort.** Above the hold threshold a message is
+- **Long threads hold their model, not their effort.** With the default gears the model is the same
+  at every tier, so there is no model switch to hold and this mostly acts on effort. On a tiered
+  ladder, above the hold threshold a message is
   still scored on its own: it keeps the thread's model (a switch would re-read the context
   uncached) but runs at its own tier's effort when that is lower, never higher, and never below
   medium for large and x-large work. A trivial or small message leaves the model only when one
@@ -60,7 +67,7 @@ bb asks every plugin hook about each message before it reaches a provider
 
 ## Sub-agents
 
-Gearshift also orchestrates. For a medium or larger message it tells the agent which sub-agents to start, starts them on the gear each role needs, and watches what they spend. For what this looks like to a user, see [Sub-agents in the README](../README.md#sub-agents); for the policy keys, see [Teams and sub-agents](routing-policy.md#teams-and-sub-agents).
+Gearshift also orchestrates, and this is where the gear shift happens. The lead stays on the capable model, plans and synthesizes, and fans the gathering and building out to cheaper roles (explore on Haiku, research and implement on Sonnet, qa and verify on Haiku, review on Opus). For a medium or larger message it tells the agent which sub-agents to start, starts them on the gear each role needs, and watches what they spend. A demoted lead gives cheap reasoning over expensively gathered context, and one model on the thread keeps long threads reading their context from cache. For what this looks like to a user, see [Sub-agents in the README](../README.md#sub-agents); for the policy keys, see [Teams and sub-agents](routing-policy.md#teams-and-sub-agents).
 
 <p align="center"><img src="assets/diagrams/subagents.svg" width="100%" alt="How Gearshift orchestrates sub-agents. A medium or larger message gets an agent-only route note naming the team, each role's gear and its budget. The lead agent, on the tier's gear, starts sub-agents with the gearshift_spawn tool. Each becomes a child thread on its role's gear, which is never re-routed. The budget guard reads each child's token usage about once a second, nudges it once at 80% of its budget, and at 100% stops it and sends a run report to the lead thread."></p>
 
@@ -70,10 +77,10 @@ The same dispatch hook that picks the gear also decides whether to add a note. I
 
 - the **Add a team note** setting (`routeNotes`) is on;
 - it is the first attempt of a turn (`start-turn`), sent by a user or another agent;
-- the tier is medium, large or xlarge;
+- the tier is medium, large or xlarge, or small with a signal that added a fan-out role (for example breadth, which adds explore);
 - the decision is a shift, keep or hold. A model you picked by hand is never held just to add a note.
 
-The note is one line: the tier, the score, the team's summary, and each role with its resolved model, effort, provider (if not the lead's) and token budget. The roles are the tier's team plus the roles its signals add (`signalRoles`). A role on another provider is resolved against that provider's model list, so the hook may load more than one list.
+The note is one line: the tier, the score, the team's summary, and each role with its resolved model, effort, provider (if not the lead's) and token budget. The roles are the tier's team plus the roles its signals add (`signalRoles`). It ends with the lead instruction: "you are the lead: plan and synthesize on this gear, and fan the gathering and building out to these roles with the gearshift_spawn tool (independent pieces in parallel, one sub-agent per source or area); do small lookups yourself". A role on another provider is resolved against that provider's model list, so the hook may load more than one list.
 
 The note rides on the amend that carries a gear shift. It is added to the queued row as an `agent-only` text block that starts with `[gearshift]`, so bb's UI does not show it. When there is no gear change the amend is note-only and the hook still waits once ("Adding the team note"). A row that already has a note is never amended twice. Blocks that start with `[gearshift]` are stripped before scoring and fingerprinting, so a re-attempt never classifies Gearshift's own text.
 

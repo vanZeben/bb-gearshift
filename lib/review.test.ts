@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildReview, formatReview, HINT_MIN_ROWS, reviewThreadIds, SMALL_OUTPUT_TOKENS, withTitles, type Review } from "./review";
-import { DEFAULT_POLICY } from "./policy";
+import { DEFAULT_POLICY, mergePolicy } from "./policy";
+import { TIERED_GEARS } from "./fixtures";
+
+// The lower-gear suggestions need a different gear per tier, so they run on the pre-0.5 tiered ladder.
+const TIERED_POLICY = mergePolicy(DEFAULT_POLICY, { gears: TIERED_GEARS });
 import type { DecisionRow } from "./store";
 
 const NOW = Date.UTC(2026, 10, 20, 12);
@@ -367,7 +371,7 @@ describe("thread titles", () => {
 describe("lower gear", () => {
   // Medium-tier rows by default: score 7 is mid-band, high confidence, big output, so nothing matches until a test sets it.
   const base = (o: Partial<DecisionRow> = {}): DecisionRow => r({ tier: "medium", score: 7, confidence: "high", output_tokens: 5000, routed_model: "sonnet", routed_effort: "high", routed_label: "Sonnet", cost_usd: 1, ...o });
-  const lowerOf = (rows: DecisionRow[], policy = DEFAULT_POLICY) => buildReview(rows, policy, { days: 30, now: NOW }).lowerGear;
+  const lowerOf = (rows: DecisionRow[], policy = TIERED_POLICY) => buildReview(rows, policy, { days: 30, now: NOW }).lowerGear;
 
   it("is empty when nothing matches", () => {
     expect(lowerOf([base(), base({ tier: "trivial", score: 1, output_tokens: 10 })])).toEqual({ n: 0, costUsd: 0, shareOfCost: 0, byReason: [], turns: [] });
@@ -415,7 +419,7 @@ describe("lower gear", () => {
       expect(n({ routed_model: null })).toBe(0);
     });
     it("compares size classes for @-class specs and never counts @default", () => {
-      const withSmall = (spec: string): typeof DEFAULT_POLICY => ({ ...DEFAULT_POLICY, gears: { ...DEFAULT_POLICY.gears, "*": { ...DEFAULT_POLICY.gears["*"], small: { model: spec, effort: "medium" } } } });
+      const withSmall = (spec: string): typeof DEFAULT_POLICY => ({ ...TIERED_POLICY, gears: { ...TIERED_POLICY.gears, "*": { ...TIERED_POLICY.gears["*"], small: { model: spec, effort: "medium" } } } });
       const row = held({ provider_id: "other" });
       expect(lowerOf([row], withSmall("@small")).turns[0]!.suggestedGear).toBe("@small · medium");
       expect(lowerOf([row], withSmall("@large")).n).toBe(0);
@@ -498,7 +502,7 @@ describe("lower gear", () => {
 
   describe("titles and format", () => {
     const rows = [base({ id: 1, thread_id: "tl", score: 6, cost_usd: 2 }), base({ id: 2, thread_id: "tm", action: "hold", tier: "small", score: 4, routed_model: "claude-opus-5-5", routed_effort: "xhigh", cost_usd: 1 })];
-    const rv = build(rows);
+    const rv = buildReview(rows, TIERED_POLICY, { days: 30, now: NOW });
     it("lists lower-gear threads for title lookup and tags them", () => {
       expect(reviewThreadIds(rv).sort()).toEqual(["tl", "tm"]);
       const out = withTitles(rv, { tl: "Edge case", tm: "Held on big" });

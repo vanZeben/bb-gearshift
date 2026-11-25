@@ -14,7 +14,7 @@ import { policyRev } from "./lib/policy-rev";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
-import { NOTE_PREFIX, teamRoles, formatBudget, formatRouteNote, gearLabel, guardAction, noteWorthy, providersFor, resolveRole, roleTarget, spendTokens } from "./lib/team";
+import { NOTE_PREFIX, teamRoles, formatBudget, formatRouteNote, gearLabel, guardAction, noteWorthy, providersFor, signalRolesFor, resolveRole, roleTarget, spendTokens } from "./lib/team";
 import { TIERS, type Tier } from "./lib/policy";
 
 export { rpcContract };
@@ -535,7 +535,7 @@ export default async function plugin(bb: BbPluginApi) {
         current, contextTokens: ctxTokens, catalog, policy: compiled,
       });
       const wantsNote = compiled.policy.routing.routeNotes && ctx.attempt === "start-turn" && (ctx.initiator === "user" || ctx.initiator === "agent")
-        && noteWorthy(d.tier) && ["shift", "keep", "hold"].includes(d.action); // a manual pick is never held just for a note
+        && noteWorthy(d.tier, d.tier ? signalRolesFor(compiled.policy, d.tier, d.classification.contributions.map((c) => c.id)).length : 0) && ["shift", "keep", "hold"].includes(d.action); // a manual pick is never held just for a note
       const note = wantsNote && d.tier ? await bounded(buildNote(d.tier, d.classification.score, d.classification.contributions.map((c) => c.id), providerId, { environmentId: ctx.thread.environmentId, hostId: ctx.host?.id ?? null, projectId: ctx.thread.projectId }, catalog), Math.max(0, deadline - Date.now()), null) : null;
       const id = record(ctx, d, ctxTokens, baselineFor(providerId, catalog), t0, text, current);
       if (queued.length) store.linkQueued(id, threadId, queued.map((r) => r.id));
@@ -562,7 +562,7 @@ export default async function plugin(bb: BbPluginApi) {
     const row: NewDecision = {
       at, thread_id: ctx.thread.id, project_id: ctx.thread.projectId, provider_id: ctx.thread.providerId, initiator: ctx.initiator,
       attempt: ctx.attempt, action: d.action, reason: d.reason, tier: d.tier, score: d.tier ? c.score : null, confidence: d.tier ? c.confidence : null, scored_tier: d.scoredTier,
-      signals: JSON.stringify(c.signals), signal_roles: JSON.stringify(d.tier ? teamRoles(compiled.policy, d.tier, c.contributions.map((x) => x.id)).slice(compiled.policy.teams[d.tier].roles.length) : []), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
+      signals: JSON.stringify(c.signals), signal_roles: JSON.stringify(d.tier ? signalRolesFor(compiled.policy, d.tier, c.contributions.map((x) => x.id)) : []), chars: c.chars, fingerprint: fingerprint(ctx.thread.id, text),
       requested_model: ctx.requestedExecution.model, requested_effort: ctx.requestedExecution.reasoningLevel,
       routed_model: d.gear?.model ?? null, routed_effort: d.gear?.effort ?? null, routed_label: d.gear?.label ?? null, routed_service_tier: d.gear?.serviceTier ?? null,
       baseline_model: baseline, context_tokens: ctxTokens, amend_status: null,

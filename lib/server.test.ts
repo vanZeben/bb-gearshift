@@ -77,7 +77,8 @@ describe("shift flow", () => {
     expect(s.update).toHaveBeenCalledTimes(1);
     const arg = s.update.mock.calls[0]![0];
     expect(arg.queuedMessageId).toBe("q1");
-    expect(arg.model).not.toBe("claude-opus-5-5");
+    expect(arg.model).toBe("claude-opus-5-5"); // the lead keeps its model; only the effort drops
+    expect(arg.reasoningLevel).toBe("low");
     expect(s.harness.inspection.recheckCount).toBeGreaterThanOrEqual(1);
     expect(s.decisions()[0]!.amend_status).toBe("done");
 
@@ -147,7 +148,8 @@ describe("rows waiting on another plugin", () => {
     await s.flush();
     expect(s.update).toHaveBeenCalledTimes(1);
     expect(s.update.mock.calls[0]![0].queuedMessageId).toBe("q1");
-    expect(s.queue.get("q1")!.model).not.toBe("claude-opus-5-5");
+    expect(s.queue.get("q1")!.model).toBe("claude-opus-5-5");
+    expect(s.queue.get("q1")!.reasoningLevel).toBe("low");
     const res = await s.hook(s.ctx(SMALL, { queuedMessages: [s.queue.get("q1")] }));
     expect(res).toEqual({ action: "proceed" });
     expect(s.decisions()).toHaveLength(1);
@@ -237,6 +239,18 @@ describe("route note", () => {
     await s.hook(s.ctx("ok thanks"));
     expect(noteBlocks(s.queue.get("q1"))).toHaveLength(0);
     expect(s.decisions().at(-1)!.signal_roles).toBe("[]");
+  });
+
+  it("is added to a small cross-repo message, offering explore", async () => {
+    const text = "Find the default terraform tags across all platform-* repos";
+    const s = await setup();
+    await s.hook(s.ctx(text));
+    expect(s.decisions().at(-1)).toMatchObject({ tier: "small", signal_roles: JSON.stringify(["explore"]) });
+    const r = s.row("q1", text);
+    await s.queued(r); await s.flush();
+    const notes = noteBlocks(s.queue.get("q1"));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toMatch(/roles: implement .*explore/);
   });
 
   it("is not added to a small message", async () => {
@@ -579,7 +593,7 @@ describe("CLI review and policy edits", () => {
     expect(off.exitCode).toBe(0);
     expect(off.stdout).toMatch(/- Large: 1 \(100%\) → 1 \(100%\)/);
     expect(off.stdout).toMatch(/Opus 5\.5 · XHigh → Opus 5\.5 · High/); // large's own gear: still lower than the recorded xhigh, but the same model
-    expect(on.stdout).toMatch(/Opus 5\.5 · XHigh → Sonnet 5\.5 · High/);
+    expect(on.stdout).toMatch(/Opus 5\.5 · XHigh → Opus 5\.5 · High/); // medium keeps the lead on Opus
     expect((await c.run(["replay", "--set", "routing.downshiftBias=maybe"], {})).stderr).toMatch(/takes true or false/);
   });
 

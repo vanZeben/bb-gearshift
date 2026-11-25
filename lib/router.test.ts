@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { biasTier, decide, switchSaves, type DecideInput } from "./router";
 import { classify } from "./classify";
-import { CLAUDE_CATALOG, compiledDefault, compiledWith } from "./fixtures";
+import { CLAUDE_CATALOG, TIERED_GEARS, compiledDefault, compiledWith } from "./fixtures";
 
 // The existing rules are tested with the downshift bias off so each keeps testing what it names; the bias has its own block below.
 const NO_BIAS = { routing: { downshiftBias: false } };
 const unbiased = compiledWith(NO_BIAS);
+// The default ladder keeps the lead on one model, so the mechanisms that need a different model per tier (holds, the
+// downshift price check, gear shifts) run on the pre-0.5 tiered ladder.
+const tiered = compiledWith({ ...NO_BIAS, gears: TIERED_GEARS });
+const tieredBiased = compiledWith({ gears: TIERED_GEARS });
 const base = (o: Partial<DecideInput> = {}): DecideInput => ({
   enabled: true, text: "fix the typo in the README", providerId: "claude-code", attempt: "start-turn", initiator: "user",
   requested: { model: "claude-opus-5-5", effort: "high" }, modelSource: null, current: null, contextTokens: null,
@@ -61,17 +65,27 @@ describe("rules in order", () => {
   });
   it("9: an unresolvable gear skips", () => {
     const only = CLAUDE_CATALOG.filter((m) => m.id.includes("opus"));
-    expect(decide(base({ text: "thanks", catalog: only }))).toMatchObject({ action: "skip", reason: "No model for trivial on claude-code" });
+    expect(decide(base({ text: "thanks", catalog: only, policy: tiered }))).toMatchObject({ action: "skip", reason: "No model for trivial on claude-code" });
+  });
+  it("9: under the default ladder an Opus-only catalog serves every tier", () => {
+    const only = CLAUDE_CATALOG.filter((m) => m.id.includes("opus"));
+    for (const text of ["thanks", "fix the typo in the README", BIG_BUILD]) expect(decide(base({ text, catalog: only })).action).not.toBe("skip");
   });
   it("11: keep when already on the tier's gear", () => {
     const d = decide(base({ text: BIG_BUILD, requested: { model: "claude-opus-5-5", effort: "xhigh" } }));
     expect(d).toMatchObject({ action: "keep", tier: "xlarge", needsAmend: false });
   });
   it("12: shift with a reason naming tier, signals and gear", () => {
-    const d = decide(base());
+    const d = decide(base({ policy: tiered }));
     expect(d).toMatchObject({ action: "shift", tier: "small", needsAmend: true });
     expect(d.gear).toMatchObject({ model: "claude-sonnet-5-5", effort: "medium" });
     expect(d.reason).toBe("Small task (change) → Sonnet 5.5 · Medium");
+  });
+  it("12: under the default ladder a small task stays on Opus and only the effort moves", () => {
+    const d = decide(base());
+    expect(d).toMatchObject({ action: "shift", tier: "small", needsAmend: true });
+    expect(d.gear).toMatchObject({ model: "claude-opus-5-5", effort: "medium" });
+    expect(d.reason).toBe("Small task (change) → Opus 5.5 · Medium");
   });
   it("12: the reason uses the same tier and effort labels as the UI", () => {
     const d = decide(base({ text: BIG_BUILD }));
@@ -112,7 +126,7 @@ describe("rule 10: hold above tokens", () => {
   });
   it("never raises the effort through a hold", () => {
     const opusLow = { model: "claude-opus-5-5", effort: "low" };
-    const d = decide(base({ current: opusLow, contextTokens: 355_000, requested: opusLow }));
+    const d = decide(base({ current: opusLow, contextTokens: 355_000, requested: opusLow, policy: tiered }));
     expect(d).toMatchObject({ action: "hold", holdKind: "gear", needsAmend: false });
     expect(d.gear!.effort).toBe("low");
   });
@@ -124,7 +138,7 @@ describe("rule 10: hold above tokens", () => {
   });
   it("a trivial message moves to the cheaper model when that beats holding, re-read included", () => {
     // 80k on Haiku 5.5 (under its 100k long-context band) costs less to write than Opus costs to read plus Opus output.
-    const d = decide(base({ text: "thanks", current: opusHigh, contextTokens: 80_000, requested: opusHigh }));
+    const d = decide(base({ text: "thanks", current: opusHigh, contextTokens: 80_000, requested: opusHigh, policy: tiered }));
     expect(d).toMatchObject({ action: "shift", holdKind: "downshift", needsAmend: true });
     expect(d.gear!.model).toBe("claude-haiku-5-5");
     expect(d.reason).toContain("cheaper than holding Opus 5.5 even with the 80k-token context re-read uncached");
@@ -135,9 +149,16 @@ describe("rule 10: hold above tokens", () => {
     expect(d.gear).toMatchObject({ model: "claude-opus-5-5", effort: "xhigh" });
   });
   it("downshifts below the threshold", () => {
-    const d = decide(base({ text: "thanks", current: opusHigh, contextTokens: 10_000 }));
+    const d = decide(base({ text: "thanks", current: opusHigh, contextTokens: 10_000, policy: tiered }));
     expect(d).toMatchObject({ action: "shift", holdKind: null });
     expect(d.gear!.model).toBe("claude-haiku-5-5");
+  });
+  it("under the default ladder a trivial message never changes the model, whatever the context", () => {
+    for (const contextTokens of [10_000, 80_000, 355_000]) {
+      const d = decide(base({ text: "thanks", current: opusHigh, contextTokens, requested: opusHigh }));
+      expect(d.holdKind).not.toBe("downshift");
+      expect(d.gear).toMatchObject({ model: "claude-opus-5-5", effort: "low" });
+    }
   });
   it("always upshifts", () => {
     const cur = { model: "claude-haiku-5-5", effort: "low" };
@@ -146,9 +167,9 @@ describe("rule 10: hold above tokens", () => {
     expect(d.gear!.model).toBe("claude-opus-5-5");
   });
   it("0 disables holding; the threshold is configurable", () => {
-    const off = compiledWith({ routing: { holdAboveTokens: 0 } });
+    const off = compiledWith({ gears: TIERED_GEARS, routing: { holdAboveTokens: 0 } });
     expect(decide(base({ text: "thanks", current: opusHigh, contextTokens: 900_000, policy: off }))).toMatchObject({ action: "shift", holdKind: null });
-    const low = compiledWith({ routing: { holdAboveTokens: 1000 } });
+    const low = compiledWith({ gears: TIERED_GEARS, routing: { holdAboveTokens: 1000 } });
     expect(decide(base({ current: opusHigh, contextTokens: 1000, policy: low })).holdKind).toBe("downshift"); // a tiny context is cheap to re-read
     expect(decide(base({ current: opusHigh, contextTokens: 999, policy: low })).holdKind).toBe(null);
   });
@@ -180,7 +201,7 @@ describe("service tier", () => {
     expect(d.gear!.serviceTier).toBe("fast");
   });
   it("keeps the composer's tier when the gear sets none", () => {
-    const d = decide(base({ requested: { model: "claude-sonnet-5-5", effort: "medium", serviceTier: "fast" } }));
+    const d = decide(base({ requested: { model: "claude-sonnet-5-5", effort: "medium", serviceTier: "fast" }, policy: tiered }));
     expect(d).toMatchObject({ action: "keep", needsAmend: false });
   });
 });
@@ -279,13 +300,13 @@ describe("downshift bias", () => {
 
   it("decide: the hold rule runs on the biased tier and never upshifts", () => {
     const { text } = lowConf;
-    const h = decide(base({ text, policy: biased, current: opusHigh, requested: opusHigh, contextTokens: 120_000 }));
+    const h = decide(base({ text, policy: tieredBiased, current: opusHigh, requested: opusHigh, contextTokens: 120_000 }));
     expect(h).toMatchObject({ action: "hold", tier: "trivial", scoredTier: "small" });
     expect(h.gear).toMatchObject({ model: "claude-opus-5-5", effort: "low" }); // the trivial effort, not small's
     expect(h.reason).toContain("(leaning lower: no clear signal)");
     // A thread already below the biased tier's gear is not lifted by it.
     const low = { model: "claude-haiku-5-5", effort: "low" };
-    const u = decide(base({ text: BAND_MIN, policy: biased, current: low, requested: low, contextTokens: 120_000 }));
+    const u = decide(base({ text: BAND_MIN, policy: tieredBiased, current: low, requested: low, contextTokens: 120_000 }));
     expect(u.tier).toBe("medium");
     expect(u.action).toBe("shift"); // the biased tier is still above what the thread runs: a hold never blocks an upshift
     expect(u.gear!.model).toBe("claude-sonnet-5-5");
