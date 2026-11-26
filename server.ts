@@ -9,6 +9,7 @@ import { resolveGear, sizeClass, toCatalog, type CatalogModel, type Gear } from 
 import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
 import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
 import { applyReplaySets, formatReplay, parseReplaySet, replayDecisions, type ReplaySet } from "./lib/replay";
+import { calibrate, formatCalibration, MIN_SAMPLES } from "./lib/calibrate";
 import { buildReview, formatReview, reviewThreadIds, withTitles } from "./lib/review";
 import { policyRev } from "./lib/policy-rev";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
@@ -705,7 +706,7 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   // ---- CLI -------------------------------------------------------------
-  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]\n  bb gearshift replay [--days N] [--set <path>=<value>]... [--json]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
+  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]\n  bb gearshift replay [--days N] [--set <path>=<value>]... [--json]\n  bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
   const policyUsage = `Policy paths:\n  ${POLICY_PATHS.join("\n  ")}\n  add-pattern / remove-pattern take a scoring class id and a regex`;
   bb.cli.register({
     name: "gearshift",
@@ -716,6 +717,7 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "off", summary: "Turn Gearshift off for a thread", usage: "bb gearshift off --thread <id>" },
       { name: "review", summary: "Report on the last N days of routing: tiers, holds, manual picks, overkill and underkill, tuning hints", usage: "bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]" },
       { name: "replay", summary: "Re-run the last N days of routing decisions under the current policy, or with --set edits, and compare tiers, holds and estimated cost", usage: "bb gearshift replay [--days N] [--set <path>=<value>]... [--json]" },
+      { name: "calibrate", summary: "Learn from the last N days which cheaper gear still got good outcomes per tier, and propose (or --apply) downshift-only ladder changes", usage: "bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]" },
       { name: "policy", summary: "Print the effective routing policy as JSON, or edit one value of it (global, validated like the editor's Save)", usage: "bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]" },
       { name: "spawn", summary: "Spawn a sub-agent thread for a team role on its policy gear and budget", usage: "bb gearshift spawn --role <role> [--thread <id>] <prompt...>" },
       { name: "explain", summary: "Classify text and show the gear it would get", usage: "bb gearshift explain <text...> [--provider <id>]" },
@@ -782,6 +784,42 @@ export default async function plugin(bb: BbPluginApi) {
           await Promise.all(providers.map(async (providerId) => { catalogs[providerId] = await bounded(catalogFor({ providerId }), PROVIDER_MS, null); }));
           const replay = replayDecisions(history, applied.policy, { days, now, catalogs, edits: sets.map((x) => `${x.path}=${x.value}`) });
           return { exitCode: 0, stdout: json ? JSON.stringify(replay, null, 2) : formatReplay(replay) };
+        }
+        case "calibrate": {
+          const d = flag("--days");
+          const days = d === undefined ? 30 : Number(d);
+          if (!Number.isInteger(days) || days < 1 || days > 365) return { exitCode: 1, stderr: "--days must be a whole number from 1 to 365" };
+          const ms = flag("--min-samples");
+          const minSamples = ms === undefined ? MIN_SAMPLES : Number(ms);
+          if (!Number.isInteger(minSamples) || minSamples < 3 || minSamples > 1000) return { exitCode: 1, stderr: "--min-samples must be a whole number from 3 to 1000" };
+          const apply = argv.includes("--apply");
+          const now = Date.now();
+          const history = store.since(now - (days + HISTORY_EXTRA_DAYS) * DAY);
+          const providers = [...new Set(history.filter((r) => r.at >= now - days * DAY).map((r) => r.provider_id))];
+          const catalogs: Record<string, CatalogModel[] | null> = {};
+          await Promise.all(providers.map(async (providerId) => { catalogs[providerId] = await bounded(catalogFor({ providerId }), PROVIDER_MS, null); }));
+          const t0 = Date.now();
+          const cal = calibrate(history, compiled.policy, { days, now, catalogs, minSamples });
+          const revBefore = currentRev();
+          let applied = false;
+          if (apply && cal.proposals.length) {
+            let next = mergePolicy(DEFAULT_POLICY, overrides);
+            for (const s of cal.proposals.flatMap((p) => p.sets)) {
+              const r = applyPolicyEdit(next, DEFAULT_POLICY, { op: "set", path: s.path, value: s.value });
+              if ("error" in r) return { exitCode: 1, stderr: `Not applied: ${s.path}: ${r.error}` };
+              next = r.policy;
+            }
+            const saved = await storeOverrides(diffOverrides(DEFAULT_POLICY, next));
+            if (!saved.ok) return { exitCode: 1, stderr: `Not saved: ${saved.errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "unknown error"}` };
+            applied = true;
+          }
+          try {
+            store.insertCalibration({ at: now, days, min_samples: minSamples, turns: cal.rows, with_outcome: cal.withOutcome, proposals: cal.proposals.length, weak: cal.weak.length,
+              applied: applied ? 1 : 0, policy_rev_before: revBefore || null, policy_rev_after: applied ? currentRev() || null : null, duration_ms: Date.now() - t0,
+              summary: JSON.stringify({ proposals: cal.proposals.map((p) => ({ providerId: p.providerId, tier: p.tier, sets: p.sets, evidence: p.evidence })), weak: cal.weak, uncalibrated: cal.uncalibrated }) });
+          } catch (e) { bb.log.warn(`calibration log failed: ${String(e)}`); }
+          bb.log.info(`calibrate: ${cal.rows} turns, ${cal.withOutcome} with outcomes, ${cal.proposals.length} downshift(s)${applied ? " applied" : ""}, ${cal.weak.length} weak`);
+          return { exitCode: 0, stdout: argv.includes("--json") ? JSON.stringify({ ...cal, applied }, null, 2) : formatCalibration(cal, applied) };
         }
         case "policy": {
           if (argv.length > 1) {

@@ -6,6 +6,10 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]`: trace-driven, downshift-only calibration. Per provider and scored tier, it finds the cheapest gear that kept good outcomes in your history (a turn is bad when the message was re-sent or a heavier model was hand-picked right after it) and proposes it for that tier, with a `replay --set` line to check it; `--apply` saves it. It never proposes a heavier model or effort, keeps large and x-large at medium effort or more, and reports tiers whose gear looks too small instead of changing them. Each run is logged to a new `calibrations` table. Idea adapted from OpenJarvis's TraceDrivenPolicy (Apache-2.0).
+
 ### Changed
 
 - **The lead stays capable; the gear shift happens in sub-agents.** The default policy no longer moves the main thread to Haiku or Sonnet by message size. On Claude Code every tier runs on Opus, at low, medium, high, high and xhigh effort from trivial to xlarge; every other provider runs every tier on its largest model (Codex on its default model) at low, medium, medium, high and xhigh. A demoted lead gives cheap reasoning over expensively gathered context, and one model on the thread stops model switches, so long threads re-read their context from cache. The tier still sets the lead's effort and its team of sub-agent roles, with the same teams, roles and budgets. The lead now fans gathering and building out to cheaper roles (explore and qa on Haiku, research and implement on Sonnet, review on Opus) with `gearshift_spawn`.
