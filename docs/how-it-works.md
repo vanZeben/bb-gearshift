@@ -197,6 +197,24 @@ it can't re-score them: score bands, gears, efforts and the hold rule replay; sc
 changes don't. Costs reuse each turn's recorded usage on the new gear, and the report says
 which parts are estimated.
 
+`bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]` learns from outcomes.
+It groups the period's turns by query class (provider and the tier the score put the message
+in, before the downshift bias moved it), and for each gear that ran on a class counts how
+often the turn went well. With no message text or ratings stored, the outcome is behavioural: a
+turn is bad when the same message was sent again in that thread within 15 minutes, or the next
+message hand-picked a heavier gear within 15 minutes; a turn with no recorded usage has no
+outcome. For each class it proposes the cheapest gear that is lighter than the ladder's gear on
+at least one axis (model price, effort) and heavier on none, has at least 8 turns with outcomes
+(`--min-samples`), a 95% Wilson lower bound on its success rate of at least 70%, and a success
+rate within 5 points of the current gear's. Large and x-large stay at medium effort or more,
+and no tier drops below the tier under it. It only ever downshifts: a class whose current gear
+does poorly (under 80% good) is listed as "possibly too small" and left alone. Without
+`--apply` nothing changes, and the report prints the `replay --set` line to check the proposals
+first; `--apply` saves them like `policy set`. Every run is logged (counts, the policy paths it
+proposed, whether it applied, and the policy hash before and after) in the plugin's database.
+The approach is adapted from the TraceDrivenPolicy in Stanford's OpenJarvis (Apache-2.0),
+changed to pick the cheapest good-enough gear rather than the best-scoring model.
+
 The **Improve my rules** button on the analytics page opens a new-thread draft that asks an
 agent to run the report and propose changes. The agent opens one of the listed threads only if
 you agree, and applies only the changes you approve.

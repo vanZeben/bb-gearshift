@@ -145,6 +145,7 @@ bb gearshift explain "<text>" [--provider <id>]   # how a message would score, n
 bb gearshift policy                               # the routing policy in effect
 bb gearshift review [--days N] [--json]           # routing report: tiers, holds, likely over- and under-sized gears
 bb gearshift replay [--days N] [--set path=value]  # what your history would cost under the current or a changed policy
+bb gearshift calibrate [--days N] [--apply]       # learn cheaper gears from outcomes; downshift only
 bb gearshift policy set <path> <value>            # change one policy value, e.g. tiers.large.max 12
 bb gearshift policy unset <path>                  # restore one value to its default
 bb gearshift policy add-pattern <classId> <regex> # add a scoring pattern to a signal class

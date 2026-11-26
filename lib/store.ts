@@ -41,7 +41,17 @@ export const MIGRATIONS: string[] = [
   `ALTER TABLE decisions ADD COLUMN policy_rev TEXT`,
   // The tier the score alone put the message in, before the downshift bias moved it one lower (tier holds the routed tier).
   `ALTER TABLE decisions ADD COLUMN scored_tier TEXT`,
+  // One row per "bb gearshift calibrate" run: what it saw, what it proposed, whether it applied (numbers and policy paths only).
+  `CREATE TABLE calibrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, days INTEGER NOT NULL, min_samples INTEGER NOT NULL, turns INTEGER NOT NULL,
+  with_outcome INTEGER NOT NULL, proposals INTEGER NOT NULL, weak INTEGER NOT NULL, applied INTEGER NOT NULL,
+  policy_rev_before TEXT, policy_rev_after TEXT, duration_ms INTEGER, summary TEXT NOT NULL DEFAULT '{}')`,
 ];
+
+export interface CalibrationRow {
+  id: number; at: number; days: number; min_samples: number; turns: number; with_outcome: number; proposals: number; weak: number;
+  applied: number; policy_rev_before: string | null; policy_rev_after: string | null; duration_ms: number | null; summary: string;
+}
 
 export type RunStatus = "running" | "done" | "nudged" | "stopped" | "failed";
 export interface RunRow {
@@ -148,6 +158,7 @@ export class Store {
     const n = this.db.prepare(`DELETE FROM decisions WHERE at<?`).run(olderThan).changes;
     this.db.prepare(`DELETE FROM queued_links WHERE decision_id NOT IN (SELECT id FROM decisions)`).run();
     this.db.prepare(`DELETE FROM runs WHERE started_at<? AND status NOT IN ('running','nudged')`).run(olderThan);
+    this.db.prepare(`DELETE FROM calibrations WHERE at<?`).run(olderThan);
     return n;
   }
 
@@ -199,6 +210,14 @@ export class Store {
   }
   runsSince(ms: number): RunRow[] {
     return this.db.prepare(`SELECT * FROM runs WHERE started_at>=? ORDER BY id`).all(ms) as RunRow[];
+  }
+
+  insertCalibration(c: Omit<CalibrationRow, "id">): number {
+    return Number(this.db.prepare(`INSERT INTO calibrations (at, days, min_samples, turns, with_outcome, proposals, weak, applied, policy_rev_before, policy_rev_after, duration_ms, summary)
+      VALUES (@at,@days,@min_samples,@turns,@with_outcome,@proposals,@weak,@applied,@policy_rev_before,@policy_rev_after,@duration_ms,@summary)`).run(c).lastInsertRowid);
+  }
+  calibrationsSince(ms: number): CalibrationRow[] {
+    return this.db.prepare(`SELECT * FROM calibrations WHERE at>=? ORDER BY id`).all(ms) as CalibrationRow[];
   }
 
   getPref(threadId: string): boolean | null {

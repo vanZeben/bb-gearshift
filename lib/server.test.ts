@@ -597,6 +597,29 @@ describe("CLI review and policy edits", () => {
     expect((await c.run(["replay", "--set", "routing.downshiftBias=maybe"], {})).stderr).toMatch(/takes true or false/);
   });
 
+  it("calibrate proposes a downshift, --apply saves it, and every run is logged", async () => {
+    const c = await cli();
+    const add = (thread: string, effort: string) => c.db.prepare("INSERT INTO decisions (at, thread_id, provider_id, initiator, attempt, action, reason, tier, scored_tier, score, signals, fingerprint, routed_model, routed_effort, routed_label, output_tokens) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .run(Date.now() - 3_600_000, thread, "claude-code", "user", "start-turn", "shift", "", "small", "small", 4, "[]", `fp-${thread}`, "claude-opus-5-5", effort, "Opus 5.5", 400);
+    for (let i = 0; i < 12; i++) add(`thr-low-${i}`, "low");
+    const dry = await c.run(["calibrate", "--days", "7"], {});
+    expect(dry.exitCode).toBe(0);
+    expect(dry.stdout).toContain("Proposed 1 downshift");
+    expect(dry.stdout).toContain("--set gears.claude-code.small.effort=low");
+    expect((await c.getPolicy()).overrides).toEqual({});
+    const json = JSON.parse((await c.run(["calibrate", "--json"], {})).stdout!) as { proposals: unknown[]; applied: boolean };
+    expect(json).toMatchObject({ applied: false });
+    expect(json.proposals).toHaveLength(1);
+    const applied = await c.run(["calibrate", "--apply"], {});
+    expect(applied.stdout).toContain("Applied 1 downshift");
+    expect((await c.getPolicy()).overrides).toEqual({ gears: { "claude-code": expect.objectContaining({ small: { model: "opus", effort: "low" } }) } });
+    const again = await c.run(["calibrate"], {});
+    expect(again.stdout).toContain("No routing change.");
+    const logged = c.db.prepare("SELECT applied, proposals FROM calibrations ORDER BY id").all();
+    expect(logged).toEqual([{ applied: 0, proposals: 1 }, { applied: 0, proposals: 1 }, { applied: 1, proposals: 1 }, { applied: 0, proposals: 0 }]);
+    for (const bad of [["calibrate", "--days", "0"], ["calibrate", "--min-samples", "1"]]) expect(await c.run(bad, {})).toMatchObject({ exitCode: 1 });
+  });
+
   it("replay rejects a bad --set, a bad --days and --set without --replay", async () => {
     const c = await cli();
     insert(c, "thr-1", "small", 4);
