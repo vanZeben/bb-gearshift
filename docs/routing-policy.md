@@ -263,7 +263,7 @@ A role can run on a different provider than the parent (set a provider override 
 
 ### Sub-agents on another provider
 
-Three plugin settings move the `implement`, `qa` and `verify` roles to another provider without hand-written overrides:
+Three plugin settings move the `implement`, `qa` and `verify` roles to another provider without hand-written overrides. A bb settings dropdown has a fixed list, so the provider is a text field there. The **Teams** tab of the policy editor has a **Sub-agents on another provider** section with the same three values and a provider list that follows the installed providers ("Same as lead" first; a provider whose model list failed is shown as "(models unavailable)" and can still be picked). It saves each change at once and warns when the provider is not usable. Both places write the same settings.
 
 | Setting | Key | Default | Effect |
 |---|---|---|---|
@@ -365,7 +365,7 @@ hand. The agent proposes a numbered list of changes with evidence. With your OK 
 few of the listed threads to judge whether the gear really fit. It applies only the changes
 you approve, with `bb gearshift policy set|unset|add-pattern|remove-pattern`, each validated
 like the editor's Save. Revert any of them in the editor (per-field revert, **Reset all**) or
-with `bb gearshift policy unset <path>`.
+with `bb gearshift policy unset <path>`. `unset` also removes a whole override: `roles.<role>` (a custom role disappears; a default role returns to its default), `teams.<tier>`, `gears.<providerId|*>` and `gears.<providerId>.<tier>`. It fails when nothing is overridden at that path, and when the remaining policy is invalid, for example a custom role that a team override still lists (unset that team first).
 
 **Spend less.** Raise the score bands (for example small 3–6, medium 7–9), set a tier to a
 lower effort, or opt in to a tiered ladder by setting a smaller model on the lower tiers (see

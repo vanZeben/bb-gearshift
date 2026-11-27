@@ -300,9 +300,11 @@ export function ConfirmButton({
 
 /** Collapsible card section. */
 export function Section({
-  title, description, actions, children, defaultOpen = true, count,
+  title, description, actions, children, defaultOpen = true, count, onToggle,
 }: {
   title: string; description?: ReactNode; actions?: ReactNode; children: ReactNode; defaultOpen?: boolean; count?: ReactNode;
+  /** Called with the new state each time the header button opens or closes the section. */
+  onToggle?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const id = useId();
@@ -313,7 +315,7 @@ export function Section({
           type="button"
           aria-expanded={open}
           aria-controls={id}
-          onClick={() => setOpen(!open)}
+          onClick={() => { setOpen(!open); onToggle?.(!open); }}
           className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-4 shrink-0" aria-hidden="true" />

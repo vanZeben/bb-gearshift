@@ -91,3 +91,43 @@ function derivedRole(role: RoleSpec, providerId: string, cap: number | null): Ro
   const budget = Object.fromEntries(TIERS.map((t) => [t, cap === null ? role.budget[t] : Math.min(role.budget[t], cap)])) as Record<Tier, number>;
   return { gears: { "*": spec }, budget };
 }
+
+/** The three sub-agent settings as the settings editor reads and writes them. */
+export interface SubagentValues { provider: string; tiers: SubagentTiers; budgetCap: number }
+
+const MAX_PROVIDER_ID = 200;
+
+/**
+ * Check a partial update of the three sub-agent settings. Returns the values to write (only the keys that were
+ * given, provider trimmed) or one message that names the field. Pure: the caller writes them.
+ */
+export function parseSubagentUpdate(input: unknown): { values: Partial<SubagentValues> } | { error: string } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { error: "Send an object with provider, tiers or budgetCap" };
+  const i = input as Record<string, unknown>;
+  const values: Partial<SubagentValues> = {};
+  if (i.provider !== undefined) {
+    if (typeof i.provider !== "string") return { error: "provider must be a string (blank = same as lead)" };
+    const id = i.provider.trim();
+    if (id.length > MAX_PROVIDER_ID) return { error: `provider must be at most ${MAX_PROVIDER_ID} characters` };
+    values.provider = id;
+  }
+  if (i.tiers !== undefined) {
+    if (typeof i.tiers !== "string" || !(SUBAGENT_TIER_CHOICES as readonly string[]).includes(i.tiers)) return { error: `tiers must be one of: ${SUBAGENT_TIER_CHOICES.join(", ")}` };
+    values.tiers = i.tiers as SubagentTiers;
+  }
+  if (i.budgetCap !== undefined) {
+    if (typeof i.budgetCap !== "number" || !Number.isInteger(i.budgetCap) || i.budgetCap < 0) return { error: "budgetCap must be a whole number of tokens, 0 or more (0 = no cap)" };
+    values.budgetCap = i.budgetCap;
+  }
+  return { values };
+}
+
+/** The current setting values with defaults filled in, as the settings editor shows them. */
+export function subagentValues(s: SubagentSettings): SubagentValues {
+  const cap = s.subagentBudgetCap;
+  return {
+    provider: typeof s.subagentProvider === "string" ? s.subagentProvider.trim() : "",
+    tiers: (SUBAGENT_TIER_CHOICES as readonly string[]).includes(s.subagentTiers ?? "") ? (s.subagentTiers as SubagentTiers) : "small-medium",
+    budgetCap: typeof cap === "number" && Number.isFinite(cap) && cap >= 1 ? Math.floor(cap) : 0,
+  };
+}

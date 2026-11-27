@@ -15,7 +15,7 @@ const sdkModels = CLAUDE_CATALOG.map((m) => ({
   supportedServiceTiers: m.serviceTiers.map((id) => ({ id })),
 }));
 
-interface Opts { settings?: Record<string, boolean | number | string>; models?: (a: Record<string, unknown>) => Promise<unknown>; defaults?: () => Promise<unknown>; threads?: Record<string, unknown>; hosts?: unknown[]; providerList?: unknown[] | (() => Promise<unknown>) }
+interface Opts { settings?: Record<string, boolean | number | string>; models?: (a: Record<string, unknown>) => Promise<unknown>; defaults?: () => Promise<unknown>; threads?: Record<string, unknown>; hosts?: unknown[]; providerList?: unknown[] | (() => Promise<unknown>); noSettingsWriter?: boolean }
 
 async function setup(o: Opts = {}) {
   // In-memory queue model: rows the plugin can list and amend.
@@ -40,6 +40,10 @@ async function setup(o: Opts = {}) {
       },
     },
   } as never);
+  if (o.noSettingsWriter) { // an older host: the settings handle has no writer
+    const define = bb.settings.define.bind(bb.settings) as unknown as (...a: unknown[]) => Record<string, unknown>;
+    (bb.settings as unknown as { define: unknown }).define = (...a: unknown[]) => { const h = define(...a); delete h.experimental_set; return h; };
+  }
   await plugin(bb);
   const hook = harness.inspection.registrations.hooks["message.dispatch"]!;
   const db = bb.storage.database();
@@ -708,6 +712,46 @@ describe("CLI review and policy edits", () => {
     expect((await c.getPolicy()).overrides).toEqual({});
   });
 
+  it("unset removes whole roles, teams and gears entries, and errors when nothing is overridden", async () => {
+    const c = await cli();
+    const budget = { trivial: 1, small: 2, medium: 3, large: 4, xlarge: 5 };
+    const save = (overrides: Record<string, unknown>) => c.harness.behavior.callRpc("savePolicy", { overrides });
+    await save({ roles: { "implement-local": { gears: { "*": { model: "@small" } }, budget } }, teams: { small: { roles: ["implement-local"] } }, gears: { p1: { small: { model: "m" } }, p2: { large: { model: "m2" } } } });
+    expect((await c.getPolicy()).overrides).toHaveProperty("roles");
+    // the role is still in a team: refused, names the team, nothing changes
+    const refused = await c.run(["policy", "unset", "roles.implement-local"], {});
+    expect(refused).toMatchObject({ exitCode: 1 });
+    expect(refused.stderr).toContain("teams.small");
+    expect((await c.getPolicy()).overrides).toHaveProperty("roles");
+    expect(await c.run(["policy", "unset", "teams.small"], {})).toMatchObject({ exitCode: 0, stdout: "teams.small: overridden → default" });
+    expect(await c.run(["policy", "unset", "roles.implement-local"], {})).toMatchObject({ exitCode: 0, stdout: "roles.implement-local: overridden → removed" });
+    expect(await c.run(["policy", "unset", "gears.p1.small"], {})).toMatchObject({ exitCode: 0 });
+    expect(await c.run(["policy", "unset", "gears.p2"], {})).toMatchObject({ exitCode: 0 });
+    expect((await c.getPolicy()).overrides).toEqual({});
+    // nothing left to unset: an error, not a silent success
+    for (const path of ["roles.implement-local", "teams.small", "gears.p2", "gears.p1.small"]) {
+      const r = await c.run(["policy", "unset", path], {});
+      expect(r).toMatchObject({ exitCode: 1 });
+      expect(r.stderr).toMatch(/no override/);
+    }
+    // leaf unset is unchanged
+    expect(await c.run(["policy", "unset", "tiers.large.max"], {})).toMatchObject({ exitCode: 0 });
+    // the usage lists the new shapes
+    const usage = await c.run(["policy", "unset"], {});
+    expect(usage.stderr).toMatch(/roles\.<role>[\s\S]*teams\.<tier>[\s\S]*gears\.<providerId\|\*>[\s\S]*gears\.<providerId>\.<tier>/);
+  });
+
+  it("unset of an unknown path lists the whole-override shapes, and a leaf path error does not repeat them for set", async () => {
+    const c = await cli();
+    const r = await c.run(["policy", "unset", "bogus.path"], {});
+    expect(r).toMatchObject({ exitCode: 1 });
+    expect(r.stderr).toMatch(/Unknown path "bogus.path"/);
+    expect(r.stderr).toMatch(/roles\.<role>[\s\S]*teams\.<tier>[\s\S]*gears\.<providerId\|\*>[\s\S]*gears\.<providerId>\.<tier>/);
+    const set = await c.run(["policy", "set", "bogus.path", "1"], {});
+    expect(set.stderr).toMatch(/Unknown path/);
+    expect(set.stderr).not.toMatch(/also removes a whole override/);
+  });
+
   it("invalid edits exit 1 and store nothing", async () => {
     const c = await cli();
     for (const argv of [["policy", "set", "tiers.large.max", "8"], ["policy", "set", "nope", "1"], ["policy", "set", "scoring.unmatchedScore", "x"], ["policy", "add-pattern", "action", "(a+)+$"], ["policy", "set", "tiers.large.max"], ["policy", "bogus"]]) {
@@ -877,5 +921,137 @@ describe("listModels host fallback", () => {
     expect(await s.hook(s.ctx(SMALL))).toMatchObject({ action: "wait" });
     const hostCalls = calls.filter((c) => c.hostId).map((c) => c.hostId);
     expect(hostCalls[0]).toBe("h-up"); // connected hosts first
+  });
+});
+
+describe("sub-agent settings RPCs", () => {
+  const codexModels = CODEX_CATALOG.map((m) => ({ id: m.id, displayName: m.displayName, isDefault: m.isDefault, supportedReasoningEfforts: m.efforts.map((reasoningEffort) => ({ reasoningEffort })), supportedServiceTiers: [] }));
+  const models = async (a: Record<string, unknown>) => (a.providerId === "codex" ? { models: codexModels } : { models: sdkModels });
+  type Dto = { provider: string; tiers: string; budgetCap: number; usable: boolean | null };
+  const rpcs = (s: Awaited<ReturnType<typeof setup>>) => ({
+    get: () => s.harness.behavior.callRpc("subagentSettings", null) as Promise<Dto>,
+    set: (input: Record<string, unknown>) => s.harness.behavior.callRpc("setSubagentSettings", input) as Promise<Dto>,
+  });
+
+  it("reads the defaults: same as lead, small and medium, no cap, usable", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    expect(await rpcs(s).get()).toEqual({ provider: "", tiers: "small-medium", budgetCap: 0, usable: true });
+  });
+
+  it("round-trips a write through the plugin settings and the routing policy", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    const r = rpcs(s);
+    expect(await r.set({ provider: " codex ", tiers: "all", budgetCap: 64_000 })).toEqual({ provider: "codex", tiers: "all", budgetCap: 64_000, usable: true });
+    expect(await r.get()).toEqual({ provider: "codex", tiers: "all", budgetCap: 64_000, usable: true });
+    const policy = await s.harness.behavior.callRpc("getPolicy", null) as { effective: { roles: Record<string, unknown> } };
+    expect(policy.effective.roles).not.toHaveProperty("qa-sub"); // the editor's policy never holds derived roles
+    // a partial write leaves the other keys alone
+    expect(await r.set({ budgetCap: 0 })).toEqual({ provider: "codex", tiers: "all", budgetCap: 0, usable: true });
+    expect(await r.set({ provider: "" })).toEqual({ provider: "", tiers: "all", budgetCap: 0, usable: true });
+    expect(await r.set({})).toEqual({ provider: "", tiers: "all", budgetCap: 0, usable: true });
+  });
+
+  it("rejects invalid values and writes nothing", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    const r = rpcs(s);
+    await r.set({ provider: "codex", budgetCap: 1000 });
+    for (const bad of [{ provider: 7 }, { provider: "x".repeat(201) }, { tiers: "huge" }, { tiers: 3 }, { budgetCap: -1 }, { budgetCap: 1.5 }, { budgetCap: "10" }, { budgetCap: Number.NaN }]) {
+      await expect(r.set(bad), JSON.stringify(bad)).rejects.toThrow();
+    }
+    await expect(s.harness.behavior.callRpc("setSubagentSettings", null as never)).rejects.toThrow();
+    expect(await r.get()).toEqual({ provider: "codex", tiers: "small-medium", budgetCap: 1000, usable: true });
+  });
+
+  it("flags a provider that is not installed, or has no models, as not usable", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    const r = rpcs(s);
+    expect(await r.set({ provider: "ghost" })).toMatchObject({ provider: "ghost", usable: false });
+    expect(await r.get()).toMatchObject({ provider: "ghost", usable: false });
+    expect(await r.set({ provider: "codex" })).toMatchObject({ provider: "codex", usable: true });
+    expect(await r.set({ provider: "" })).toMatchObject({ usable: true });
+
+    const off = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex", enabled: false }] });
+    expect(await rpcs(off).set({ provider: "codex" })).toMatchObject({ usable: false });
+
+    const empty = await setup({ models: async (a) => (a.providerId === "codex" ? { models: [] } : { models: sdkModels }), providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    expect(await rpcs(empty).set({ provider: "codex" })).toMatchObject({ usable: false });
+  });
+
+  it("keeps the provider but reports usable null when the host's provider list does not answer", async () => {
+    const s = await setup({ models });
+    expect(await rpcs(s).set({ provider: "codex" })).toMatchObject({ provider: "codex", usable: null });
+    expect(await rpcs(s).get()).toMatchObject({ provider: "codex", usable: null });
+  });
+
+  it("keeps trusting the provider (usable null, setting applied) when its catalog never answers", async () => {
+    const hung = async (a: Record<string, unknown>) => (a.providerId === "codex" ? new Promise<never>(() => {}) : { models: sdkModels });
+    const s = await setup({ models: hung, providerList: async () => [{ id: PROVIDER }, { id: "codex" }], threads: { get: async () => makeThreadResponse({ id: T, providerId: PROVIDER, environmentId: "env1", projectId: "p1" } as never), spawn: vi.fn(async (a: Record<string, unknown>) => ({ id: "child-1", ...a })) } });
+    const r = rpcs(s);
+    const pending = r.set({ provider: "codex" });
+    await vi.advanceTimersByTimeAsync(5000); // the bounded catalog lookup gives up
+    expect(await pending).toMatchObject({ provider: "codex", usable: null });
+    expect(await r.get()).toMatchObject({ provider: "codex", usable: null });
+    const res = s.harness.behavior.callAgentTool("gearshift_spawn", { role: "qa-sub", prompt: "x" }, { threadId: T } as never);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(JSON.stringify(await res)).not.toMatch(/Unknown role/); // the derived role still exists: the id is trusted
+  });
+
+  it("reports usable null, not true, while the provider check has not answered, and the real verdict once it does", async () => {
+    let answer = false;
+    const list = async () => (answer ? [{ id: PROVIDER }, { id: "codex" }] : new Promise<never>(() => {}));
+    const s = await setup({ models, providerList: list });
+    const r = rpcs(s);
+    const pending = r.set({ provider: "codex" });
+    await vi.advanceTimersByTimeAsync(5000); // the bounded check gives up
+    expect(await pending).toMatchObject({ provider: "codex", usable: null });
+    expect(await r.get()).toMatchObject({ usable: null });
+    expect(await r.set({ provider: "" })).toMatchObject({ usable: true }); // a blank provider needs no check
+    answer = true;
+    expect(await r.set({ provider: "codex" })).toMatchObject({ usable: true });
+  });
+
+  it("runs one provider check per write, shared with the one the settings change starts", async () => {
+    const list = vi.fn(async () => [{ id: PROVIDER }, { id: "codex" }]);
+    const s = await setup({ models, providerList: list });
+    await s.flush();
+    const before = list.mock.calls.length;
+    expect(await rpcs(s).set({ provider: "codex" })).toMatchObject({ usable: true });
+    expect(list.mock.calls.length - before).toBe(1);
+  });
+
+  it("shares a check that is already running between callers", async () => {
+    let release: (v: unknown) => void = () => {};
+    const list = vi.fn(() => new Promise((res) => { release = res; }));
+    const s = await setup({ models, providerList: list });
+    const r = rpcs(s);
+    const first = r.set({ provider: "codex" });
+    await vi.advanceTimersByTimeAsync(10);
+    const second = r.set({ budgetCap: 5 }); // a second write while the first check is pending
+    await vi.advanceTimersByTimeAsync(10);
+    expect(list).toHaveBeenCalledTimes(1);
+    release([{ id: PROVIDER }, { id: "codex" }]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await first).toMatchObject({ usable: true });
+    expect(await second).toMatchObject({ budgetCap: 5 });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails with a readable error, not a TypeError, on a host without a settings writer", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }], noSettingsWriter: true });
+    const r = rpcs(s);
+    const err = await r.set({ provider: "codex" }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(String((err as Error).message)).toMatch(/cannot change plugin settings/);
+    expect(err).not.toBeInstanceOf(TypeError);
+    await expect(r.set({ tiers: "huge" })).rejects.toThrow(); // validation still comes first
+    expect(await r.set({})).toMatchObject({ provider: "" }); // nothing to write, nothing to fail
+    expect(await r.get()).toMatchObject({ provider: "" });
+  });
+
+  it("sees a change made in the plugin settings page", async () => {
+    const s = await setup({ models, providerList: [{ id: PROVIDER }, { id: "codex" }] });
+    await s.harness.behavior.setSettings({ subagentProvider: "codex", subagentBudgetCap: 5000 });
+    await s.flush();
+    expect(await rpcs(s).get()).toEqual({ provider: "codex", tiers: "small-medium", budgetCap: 5000, usable: true });
   });
 });

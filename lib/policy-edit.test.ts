@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./policy-edit";
-import { DEFAULT_POLICY, diffOverrides, mergePolicy, validatePolicy, type Policy } from "./policy";
+import { applyPolicyEdit, isSubtreePath, POLICY_PATHS, unsetOverrideSubtree, type PolicyEdit } from "./policy-edit";
+import { DEFAULT_POLICY, diffOverrides, mergePolicy, validatePolicy, type Policy, type PolicyOverrides } from "./policy";
 
 const D = DEFAULT_POLICY;
 const ok = (edit: PolicyEdit, eff: Policy = D) => {
@@ -251,5 +251,94 @@ describe("applyPolicyEdit: roles and unknown paths", () => {
     const r = ok(set("tiers.large.max", "12"));
     expect(JSON.stringify(D)).toBe(before);
     expect(mergePolicy(D, diffOverrides(D, r.policy))).toEqual(r.policy);
+  });
+});
+
+describe("unsetOverrideSubtree", () => {
+  const budget = { trivial: 1, small: 2, medium: 3, large: 4, xlarge: 5 };
+  const custom = { gears: { "*": { model: "@small" } }, budget };
+  const unsetOk = (o: PolicyOverrides, path: string) => {
+    const r = unsetOverrideSubtree(o, D, path);
+    if ("error" in r) throw new Error(r.error);
+    expect(validatePolicy(r.policy)).toEqual([]);
+    return r;
+  };
+  const unsetErr = (o: PolicyOverrides, path: string) => {
+    const r = unsetOverrideSubtree(o, D, path);
+    if (!("error" in r)) throw new Error("expected an error");
+    return r.error;
+  };
+
+  it("removes a custom role", () => {
+    const o = { roles: { "implement-local": custom } };
+    expect(mergePolicy(D, o).roles["implement-local"]).toBeDefined();
+    const r = unsetOk(o, "roles.implement-local");
+    expect(r.policy.roles["implement-local"]).toBeUndefined();
+    expect(r.overrides).toEqual({});
+    expect(r.before).toBe("overridden");
+    expect(r.after).toBe("removed");
+    expect(o.roles["implement-local"]).toBe(custom); // input untouched
+  });
+  it("puts a changed default role back to its default", () => {
+    const r = unsetOk({ roles: { implement: { budget: { ...D.roles.implement!.budget, large: 1 } } } }, "roles.implement");
+    expect(r.policy.roles.implement).toEqual(D.roles.implement);
+    expect(r.after).toBe("default");
+  });
+  it("removes a team override and keeps the other overrides", () => {
+    const o = { teams: { small: { roles: ["implement", "qa"] }, large: { roles: ["implement"] } }, roles: { "x-role": custom } };
+    expect(mergePolicy(D, o).teams.small.roles).toEqual(["implement", "qa"]);
+    const r = unsetOk(o, "teams.small");
+    expect(r.policy.teams.small).toEqual(D.teams.small);
+    expect(r.overrides).toEqual({ teams: { large: { roles: ["implement"] } }, roles: { "x-role": custom } });
+  });
+  it("removes a gears entry for a provider and for one tier of it", () => {
+    const o = { gears: { "my-provider": { small: { model: "m1" }, large: { model: "m2" } }, "*": { small: { model: "@medium" } } } };
+    const tier = unsetOk(o, "gears.my-provider.small");
+    expect(tier.policy.gears["my-provider"]).toEqual({ large: { model: "m2" } });
+    const whole = unsetOk(o, "gears.my-provider");
+    expect(whole.policy.gears["my-provider"]).toBeUndefined();
+    expect(whole.overrides).toEqual({ gears: { "*": { small: { model: "@medium" } } } });
+    const star = unsetOk(o, "gears.*");
+    expect(star.policy.gears["*"]).toEqual(D.gears["*"]);
+    expect(star.after).toBe("default");
+  });
+  it("drops the empty parent when the last child goes", () => {
+    expect(unsetOk({ gears: { p: { small: { model: "m" } } } }, "gears.p.small").overrides).toEqual({});
+  });
+  it("errors, not a silent success, when nothing is overridden there", () => {
+    expect(unsetErr({}, "roles.implement")).toMatch(/no override at "roles.implement"/);
+    expect(unsetErr({ roles: { a: custom } }, "roles.b")).toMatch(/nothing to unset/);
+    expect(unsetErr({ teams: { small: { roles: ["qa"] } } }, "teams.large")).toMatch(/no override/);
+    expect(unsetErr({ gears: { p: { small: { model: "m" } } } }, "gears.p.large")).toMatch(/no override/);
+    expect(unsetErr({}, "roles.__proto__")).toMatch(/no override/);
+  });
+  it("errors, naming the signalRoles path, when a signal still lists the role", () => {
+    const o = { roles: { "implement-local": custom }, signalRoles: { research: ["research", "implement-local"] } };
+    const e = unsetErr(o, "roles.implement-local");
+    expect(e).toMatch(/signalRoles\.research: Unknown role "implement-local"/);
+    expect(e).toMatch(/Remove the role from signalRoles\.research first\./);
+    expect(e).not.toMatch(/Unset teams/);
+  });
+  it("names both a team and a signal when both still list the role", () => {
+    const o = { roles: { x: custom }, teams: { small: { roles: ["x"] } }, signalRoles: { research: ["x"] } };
+    const e = unsetErr(o, "roles.x");
+    expect(e).toMatch(/Unset teams\.small first\./);
+    expect(e).toMatch(/Remove the role from signalRoles\.research first\./);
+  });
+  it("errors, naming the team, when a team override still lists the role", () => {
+    const o = { roles: { "implement-local": custom }, teams: { small: { roles: ["implement-local"] }, large: { roles: ["implement-local", "qa"] } } };
+    const e = unsetErr(o, "roles.implement-local");
+    expect(e).toMatch(/Unknown role "implement-local"/);
+    expect(e).toContain("teams.small");
+    expect(e).toContain("teams.large");
+    expect(e).toMatch(/Unset teams\.small and teams\.large first/);
+    // unsetting the teams first, then the role, works
+    const o2 = unsetOk(unsetOk(unsetOk(o, "teams.small").overrides, "teams.large").overrides, "roles.implement-local");
+    expect(o2.overrides).toEqual({});
+  });
+  it("recognises the subtree shapes only", () => {
+    for (const p of ["roles.a", "teams.small", "gears.*", "gears.p", "gears.p.small"]) expect(isSubtreePath(p)).toBe(true);
+    for (const p of ["roles", "roles.a.budget.large", "roles.a.", "teams.huge", "teams.small.roles", "gears", "gears.p.huge", "gears.p.small.model", "tiers.large.min", ""]) expect(isSubtreePath(p)).toBe(false);
+    expect(unsetErr({}, "tiers.large")).toMatch(/roles\.<role>[\s\S]*teams\.<tier>[\s\S]*gears\.<providerId\|\*>/);
   });
 });

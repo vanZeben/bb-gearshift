@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { CLAUDE_CATALOG } from "./fixtures";
 import { DEFAULT_POLICY, TIERS, validatePolicy, type Policy, type Tier } from "./policy";
 import { policyRev } from "./policy-rev";
-import { applySubagentProvider, fallbackRoleName, spawnRoleName, subagentRoleName } from "./subagent-provider";
+import { applySubagentProvider, fallbackRoleName, parseSubagentUpdate, spawnRoleName, subagentRoleName, subagentValues } from "./subagent-provider";
 import { resolveRole, roleTarget } from "./team";
 
 const LOCAL = "llama-cpp";
@@ -183,5 +183,26 @@ describe("role name helpers", () => {
     expect(fallbackRoleName("qa-sub", DEFAULT_POLICY)).toBe("qa");
     expect(fallbackRoleName("qa", DEFAULT_POLICY)).toBeNull();
     expect(fallbackRoleName("ghost-sub", DEFAULT_POLICY)).toBeNull();
+  });
+});
+
+describe("parseSubagentUpdate and subagentValues", () => {
+  it("accepts any subset of the three keys and trims the provider", () => {
+    expect(parseSubagentUpdate({})).toEqual({ values: {} });
+    expect(parseSubagentUpdate({ provider: "  codex " })).toEqual({ values: { provider: "codex" } });
+    expect(parseSubagentUpdate({ provider: "" })).toEqual({ values: { provider: "" } });
+    expect(parseSubagentUpdate({ tiers: "all", budgetCap: 0 })).toEqual({ values: { tiers: "all", budgetCap: 0 } });
+  });
+  it("names the field that is wrong", () => {
+    expect(parseSubagentUpdate({ provider: 1 })).toEqual({ error: expect.stringMatching(/^provider /) });
+    expect(parseSubagentUpdate({ provider: "x".repeat(201) })).toEqual({ error: expect.stringMatching(/^provider /) });
+    expect(parseSubagentUpdate({ tiers: "some" })).toEqual({ error: expect.stringMatching(/^tiers must be one of: small-medium, all/) });
+    for (const budgetCap of [-1, 2.5, "5", null, Number.NaN, Number.POSITIVE_INFINITY]) expect(parseSubagentUpdate({ budgetCap })).toEqual({ error: expect.stringMatching(/^budgetCap /) });
+    for (const bad of [null, "x", 3, []]) expect(parseSubagentUpdate(bad)).toHaveProperty("error");
+  });
+  it("fills the defaults for a missing or malformed setting", () => {
+    expect(subagentValues({})).toEqual({ provider: "", tiers: "small-medium", budgetCap: 0 });
+    expect(subagentValues({ subagentProvider: " codex ", subagentTiers: "all", subagentBudgetCap: 64_000.9 })).toEqual({ provider: "codex", tiers: "all", budgetCap: 64_000 });
+    expect(subagentValues({ subagentTiers: "weird", subagentBudgetCap: -5 })).toEqual({ provider: "", tiers: "small-medium", budgetCap: 0 });
   });
 });

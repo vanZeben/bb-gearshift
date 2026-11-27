@@ -35,7 +35,7 @@ Use this when the user asks to improve, tune or audit their routing, or starts f
 3. Run `bb gearshift calibrate --days N` for outcome-backed downshifts per tier; its proposals come with the `replay --set` line to check them.
 4. Check candidate changes with `bb gearshift explain "<text>"`, and test them against real history with `bb gearshift replay --set path=value` (repeat `--set` for several edits) before applying anything.
 5. Propose a short numbered list of changes, each with its evidence and expected effect. Wait for approval.
-6. Apply only the approved ones with `bb gearshift policy set <path> <value>`, `policy unset <path>`, `policy add-pattern <classId> <regex>` or `policy remove-pattern <classId> <regex>`, then run `bb gearshift policy` and show the result. Tell the user every change can be reverted in the editor (per-field revert, Reset all) or with `policy unset`.
+6. Apply only the approved ones with `bb gearshift policy set <path> <value>`, `policy unset <path>` (also a whole override: `roles.<role>`, `teams.<tier>`, `gears.<providerId|*>[.<tier>]`), `policy add-pattern <classId> <regex>` or `policy remove-pattern <classId> <regex>`, then run `bb gearshift policy` and show the result. Tell the user every change can be reverted in the editor (per-field revert, Reset all) or with `policy unset`.
 
 ## Sub-agents: `gearshift_spawn`
 

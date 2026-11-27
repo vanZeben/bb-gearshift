@@ -7,12 +7,12 @@ import { DECISIONS_CHANGED } from "./lib/channels";
 import { rpcContract, type PolicyStateDto, type PreviewDto, type ProvidersDto, type ThreadStateDto } from "./lib/contract";
 import { resolveGear, resolveModel, sizeClass, toCatalog, type CatalogModel, type Gear } from "./lib/gears";
 import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, validatePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
-import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
+import { applyPolicyEdit, isSubtreePath, POLICY_PATHS, UNSET_SUBTREE_PATHS, unsetOverrideSubtree, type PolicyEdit } from "./lib/policy-edit";
 import { applyReplaySets, formatReplay, parseReplaySet, replayDecisions, type ReplaySet } from "./lib/replay";
 import { calibrate, formatCalibration, MIN_SAMPLES } from "./lib/calibrate";
 import { buildReview, formatReview, reviewThreadIds, withTitles } from "./lib/review";
 import { policyRev } from "./lib/policy-rev";
-import { applySubagentProvider, fallbackRoleName, spawnRoleName, SUBAGENT_TIER_CHOICES } from "./lib/subagent-provider";
+import { applySubagentProvider, fallbackRoleName, parseSubagentUpdate, spawnRoleName, SUBAGENT_TIER_CHOICES, subagentValues } from "./lib/subagent-provider";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
@@ -146,15 +146,16 @@ export default async function plugin(bb: BbPluginApi) {
    * Check that the sub-agent provider is listed, enabled and has a catalog with a default model; rebuild when that
    * changes whether the setting applies. A lookup that fails or times out changes nothing. Never throws.
    */
-  const refreshProviders = async () => {
+  const checks = new Map<string, Promise<void>>();
+  const TIMED_OUT = Symbol("timed out");
+  const checkProvider = async (id: string) => {
     try {
-      const id = cfg.subagentProvider?.trim();
-      if (!id) return;
       const list = await bounded(bb.sdk.providers.list(), PROVIDER_MS, null);
       if (!list) return;
       let usable = false;
       if (list.some((p) => p.id === id && (!("enabled" in p) || p.enabled !== false))) {
-        const cat = await bounded(catalogFor({ providerId: id }), PROVIDER_MS, null);
+        const cat = await bounded(catalogFor({ providerId: id }), PROVIDER_MS, TIMED_OUT);
+        if (cat === TIMED_OUT) return; // no answer is not "missing": keep trusting the id, as for a list timeout
         usable = !!cat && !!resolveModel("@default", cat);
       }
       if (cfg.subagentProvider?.trim() !== id) return; // the setting changed while we looked
@@ -163,16 +164,31 @@ export default async function plugin(bb: BbPluginApi) {
       if (was !== providerMissing()) rebuild();
     } catch (e) { bb.log.warn(`could not check the sub-agent provider: ${String(e)}`); }
   };
+  /** One check per provider id at a time: callers that arrive while one runs share it instead of starting another. */
+  const refreshProviders = (): Promise<void> => {
+    const id = cfg.subagentProvider?.trim();
+    if (!id) return Promise.resolve();
+    let run = checks.get(id);
+    if (!run) {
+      run = checkProvider(id).finally(() => checks.delete(id));
+      checks.set(id, run);
+    }
+    return run;
+  };
   try {
     const saved = await bb.storage.kv.get<unknown>(POLICY_KEY);
     overrides = isObj(saved) ? stripLocked(saved).clean : {};
   } catch (e) { bb.log.warn(`could not read saved policy: ${String(e)}`); }
   rebuild();
-  settings.onChange((next) => {
+  /** Take new settings: rebuild the policy and, for a new provider id, check it. Idempotent, so the host's change event and our own write can both call it. */
+  const applySettings = (next: typeof cfg) => {
     if (next.subagentProvider?.trim() !== cfg.subagentProvider?.trim()) installedProviders = null; // trust the new id until it is checked
     cfg = next; rebuild();
     if (canListProviders) void refreshProviders();
-  });
+  };
+  settings.onChange(applySettings);
+  /** Older hosts have no settings writer. */
+  const canWriteSettings = typeof settings.experimental_set === "function";
   const policyState = (ok = true, extra: PolicyError[] = []): PolicyStateDto => ({
     ok: ok && policyErrors.length === 0, defaults: DEFAULT_POLICY, overrides, effective: editable, errors: [...extra, ...policyErrors],
   });
@@ -725,6 +741,17 @@ export default async function plugin(bb: BbPluginApi) {
     return { providers };
   }
 
+  /**
+   * The sub-agent settings with the verdict on the provider: true or false once a check answered, null while the
+   * check has not answered yet (or timed out). A blank provider is always usable. A host that cannot list providers
+   * is trusted, as in routing.
+   */
+  const subagentState = () => {
+    const v = subagentValues(cfg);
+    const usable = !v.provider || !canListProviders ? true : installedProviders === null ? null : !providerMissing();
+    return { ...v, usable };
+  };
+
   async function storeOverrides(next: PolicyOverrides): Promise<PolicyStateDto> {
     const { clean, errors: locked } = stripLocked(next);
     const { errors } = resolvePolicy(clean);
@@ -753,6 +780,24 @@ export default async function plugin(bb: BbPluginApi) {
     savePolicy: ({ overrides: next }) => storeOverrides(next),
     resetPolicy: ({ path }) => storeOverrides(removeOverridePath(overrides, path)),
     providers: () => providersState(),
+    subagentSettings: () => subagentState(),
+    setSubagentSettings: async (input) => {
+      const parsed = parseSubagentUpdate(input);
+      if ("error" in parsed) throw new Error(parsed.error);
+      const { provider, tiers, budgetCap } = parsed.values;
+      const write = {
+        ...(provider !== undefined ? { subagentProvider: provider } : {}),
+        ...(tiers !== undefined ? { subagentTiers: tiers } : {}),
+        ...(budgetCap !== undefined ? { subagentBudgetCap: budgetCap } : {}),
+      };
+      if (Object.keys(write).length) {
+        if (!canWriteSettings) throw new Error("This bb host cannot change plugin settings from the app. Update bb, or change the setting on the plugin settings page.");
+        const next = await settings.experimental_set(write);
+        applySettings(next); // starts the check for a new provider id
+        if (provider && canListProviders && installedProviders === null) await refreshProviders(); // answer with a checked verdict, not the unchecked one; shares the check just started
+      }
+      return subagentState();
+    },
   });
 
   /**
@@ -771,8 +816,8 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   // ---- CLI -------------------------------------------------------------
-  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]\n  bb gearshift replay [--days N] [--set <path>=<value>]... [--json]\n  bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
-  const policyUsage = `Policy paths:\n  ${POLICY_PATHS.join("\n  ")}\n  add-pattern / remove-pattern take a scoring class id and a regex`;
+  const usage = "Usage:\n  bb gearshift status [--thread <id>]\n  bb gearshift on --thread <id>\n  bb gearshift off --thread <id>\n  bb gearshift explain <text...> [--provider <id>]\n  bb gearshift review [--days N] [--json] [--replay [--set <path>=<value>]...]\n  bb gearshift replay [--days N] [--set <path>=<value>]... [--json]\n  bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]\n  bb gearshift policy [set <path> <value> | unset <path> | add-pattern <classId> <regex> | remove-pattern <classId> <regex>]\n    unset <path> also removes a whole override: roles.<role>, teams.<tier>, gears.<providerId|*>, gears.<providerId>.<tier>\n  bb gearshift spawn --role <role> [--thread <id>] <prompt...>";
+  const policyUsage = `Policy paths:\n  ${POLICY_PATHS.join("\n  ")}\n  add-pattern / remove-pattern take a scoring class id and a regex\n  unset also removes a whole override:\n    ${UNSET_SUBTREE_PATHS.join("\n    ")}`;
   bb.cli.register({
     name: "gearshift",
     summary: "Automatic model routing: status, per-thread toggle, explain a routing decision",
@@ -895,8 +940,15 @@ export default async function plugin(bb: BbPluginApi) {
             else if (op === "unset") { if (!a || rest.length) return bad("unset needs exactly a path"); edit = { op, path: a }; }
             else if (op === "add-pattern" || op === "remove-pattern") { if (!a || rest.length === 0) return bad(`${op} needs a class id and a regex`); edit = { op, classId: a, pattern: rest.join(" ") }; }
             else return bad(`Unknown policy command "${op}"`);
+            if (edit.op === "unset" && isSubtreePath(edit.path)) {
+              const u = unsetOverrideSubtree(overrides, DEFAULT_POLICY, edit.path);
+              if ("error" in u) return { exitCode: 1, stderr: u.error };
+              const savedSubtree = await storeOverrides(u.overrides);
+              if (!savedSubtree.ok) return { exitCode: 1, stderr: `Not saved: ${savedSubtree.errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "unknown error"}` };
+              return { exitCode: 0, stdout: `${u.path}: ${u.before} → ${u.after}` };
+            }
             const r = applyPolicyEdit(mergePolicy(DEFAULT_POLICY, overrides), DEFAULT_POLICY, edit);
-            if ("error" in r) return { exitCode: 1, stderr: r.error };
+            if ("error" in r) return { exitCode: 1, stderr: edit.op === "unset" && /^Unknown path /.test(r.error) ? `${r.error}\n  unset also removes a whole override:\n    ${UNSET_SUBTREE_PATHS.join("\n    ")}` : r.error };
             const saved = await storeOverrides(diffOverrides(DEFAULT_POLICY, r.policy));
             if (!saved.ok) return { exitCode: 1, stderr: `Not saved: ${saved.errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "unknown error"}` };
             return { exitCode: 0, stdout: `${r.path}: ${r.before} → ${r.after}` };

@@ -87,7 +87,7 @@ On Claude Code, `implement` runs on Sonnet (medium effort, high from medium up),
 
 **Other providers.** A role can run on a different provider than the lead, for example a review on Codex while the lead runs on Claude Code. Set a provider override on the role's gear in the Teams tab.
 
-**Sub-agents on another provider.** To keep the lead on a cloud provider and run the building on another one, such as a local model, set **Sub-agent provider** to that provider's id. Choose **Small and medium tiers** or **All tiers** for the sizes it covers, and set **Sub-agent budget cap** to fit the model's context window. For the chosen tiers, the team then names `implement-sub`, `qa-sub` and `verify-sub`: copies of those roles that run on the provider's default model with the same effort and budgets, clamped to the cap. `review`, `architecture`, `research` and `explore` stay on the lead's provider. Blank means no change. If the provider is not installed, Gearshift ignores the setting. The Teams tab does not show the derived roles, and nothing you save there includes them. If you define a role with one of those names yourself, Gearshift leaves that role alone.
+**Sub-agents on another provider.** To keep the lead on a cloud provider and run the building on another one, such as a local model, set **Sub-agent provider** to that provider's id. Choose **Small and medium tiers** or **All tiers** for the sizes it covers, and set **Sub-agent budget cap** to fit the model's context window. For the chosen tiers, the team then names `implement-sub`, `qa-sub` and `verify-sub`: copies of those roles that run on the provider's default model with the same effort and budgets, clamped to the cap. `review`, `architecture`, `research` and `explore` stay on the lead's provider. Blank means no change. If the provider is not installed, Gearshift ignores the setting. Pick the provider from a list in **Settings → Plugins → Gearshift → Routing policy → Teams → Sub-agents on another provider**; that list follows the providers you have installed, and it warns when the chosen provider cannot be used. The plain **Sub-agent provider** setting takes the same id as text. The Teams tab does not show the derived roles, and nothing you save there includes them. If you define a role with one of those names yourself, Gearshift leaves that role alone.
 
 **See and edit it.** Teams, roles, gears and budgets live in the **Teams** tab of the Routing policy editor. The analytics page has a **Sub-agents** card: lead against sub-agent spend, runs by role, how much of its budget each run used, and the most recent runs.
 
@@ -127,7 +127,7 @@ Everything is an ordinary setting in **Settings → Plugins → Gearshift**. The
 | Route messages from other agents | on | Also route messages that other agents send into a thread. |
 | Don't downshift above this many context tokens | 60,000 | Keeps long threads on their current model so their cache isn't wasted. Matters for a tiered ladder; under the default gears the model is the same at every tier. 0 turns this off. |
 | Add a team note to medium and larger messages | on | Tells the agent which sub-agent roles to spawn and on what. Off means no orchestration prompts. |
-| Sub-agent provider | blank (same as lead) | A provider id, such as a local-model plugin. When set, the `implement`, `qa` and `verify` sub-agents run on that provider's default model. An id that is not installed is ignored. See [Sub-agents on another provider](#sub-agents). |
+| Sub-agent provider | blank (same as lead) | A provider id, such as a local-model plugin. The Teams tab of the policy editor has a list of the installed providers for it. When set, the `implement`, `qa` and `verify` sub-agents run on that provider's default model. An id that is not installed is ignored. See [Sub-agents on another provider](#sub-agents). |
 | Sub-agent provider applies to | Small and medium tiers | Or all tiers. |
 | Sub-agent budget cap in tokens | 0 (no cap) | Clamps the budgets of the sub-agent roles moved to the sub-agent provider, so a local model with a 64k context is not given 360k to 1.2M. Other roles keep their budgets. |
 | Days of history kept | 90 | Routing history used by the analytics page. |
@@ -152,7 +152,8 @@ bb gearshift review [--days N] [--json]           # routing report: tiers, holds
 bb gearshift replay [--days N] [--set path=value]  # what your history would cost under the current or a changed policy
 bb gearshift calibrate [--days N] [--apply]       # learn cheaper gears from outcomes; downshift only
 bb gearshift policy set <path> <value>            # change one policy value, e.g. tiers.large.max 12
-bb gearshift policy unset <path>                  # restore one value to its default
+bb gearshift policy unset <path>                  # restore one value to its default, or remove a whole
+                                                  # override: roles.<role>, teams.<tier>, gears.<provider|*>[.<tier>]
 bb gearshift policy add-pattern <classId> <regex> # add a scoring pattern to a signal class
 bb gearshift policy remove-pattern <classId> <regex>
 bb plugin config gearshift set defaultOn false    # change a setting
