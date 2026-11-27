@@ -1,6 +1,6 @@
 // Pure: one plain edit of the effective policy ("bb gearshift policy set <path> <value>").
 // The caller diffs the result against the defaults and stores it through the same path as the editor's Save.
-import { TIERS, validatePolicy, type Policy, type Tier } from "./policy";
+import { TIERS, mergePolicy, removeOverridePath, validatePolicy, type Policy, type PolicyOverrides, type Tier } from "./policy";
 
 export type PolicyEdit =
   | { op: "set"; path: string; value: string }
@@ -220,4 +220,68 @@ export function applyPolicyEdit(effective: Policy, defaults: Policy, edit: Polic
   const errors = validatePolicy(next);
   if (errors.length) return bad(errors.map((e) => `${e.path}: ${e.message}`).join("; "));
   return { policy: next, path, before, after };
+}
+
+/** The override subtrees that `unset` can remove as a whole, for help text and error messages. */
+export const UNSET_SUBTREE_PATHS = [
+  "roles.<role>",
+  "teams.<tier>",
+  "gears.<providerId|*>",
+  "gears.<providerId>.<tier>",
+] as const;
+
+/**
+ * A path that names a whole override subtree (a role, a team, a gears entry) instead of one leaf value.
+ * Only the shape is checked: whether anything is overridden there is up to `unsetOverrideSubtree`.
+ */
+export function isSubtreePath(path: string): boolean {
+  const s = path.trim().split(".");
+  if (s.some((x) => x === "")) return false;
+  if (s[0] === "roles") return s.length === 2;
+  if (s[0] === "teams") return s.length === 2 && isTier(s[1]!);
+  if (s[0] === "gears") return s.length === 2 || (s.length === 3 && isTier(s[2]!));
+  return false;
+}
+
+export interface SubtreeUnsetResult { overrides: PolicyOverrides; policy: Policy; path: string; before: string; after: string }
+
+const getIn = (node: unknown, parts: string[]): unknown => {
+  let cur: unknown = node;
+  for (const k of parts) {
+    if (!cur || typeof cur !== "object" || Array.isArray(cur) || !Object.hasOwn(cur, k)) return undefined;
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return cur;
+};
+const hasIn = (node: unknown, parts: string[]): boolean => {
+  const parent = getIn(node, parts.slice(0, -1));
+  return !!parent && typeof parent === "object" && !Array.isArray(parent) && Object.hasOwn(parent, parts[parts.length - 1]!);
+};
+
+/**
+ * Remove the saved override at `roles.<role>`, `teams.<tier>`, `gears.<providerId|*>` or `gears.<providerId>.<tier>`,
+ * so that part of the policy falls back to the defaults (a custom role or gears row disappears).
+ * Errors when the path is not one of those shapes, when nothing is overridden there, and when the policy that would be
+ * left does not validate (for example a custom role that a team override still lists).
+ */
+export function unsetOverrideSubtree(overrides: PolicyOverrides, defaults: Policy, rawPath: string): SubtreeUnsetResult | PolicyEditError {
+  const path = rawPath.trim();
+  if (!isSubtreePath(path)) return bad(`Cannot unset "${path}" as a whole. Valid shapes:\n  ${UNSET_SUBTREE_PATHS.join("\n  ")}`);
+  const parts = path.split(".");
+  if (!hasIn(overrides, parts)) return bad(`There is no override at "${path}", so there is nothing to unset.`);
+  const nextOverrides = removeOverridePath(overrides, path);
+  const policy = mergePolicy(defaults, nextOverrides);
+  const errors = validatePolicy(policy);
+  if (errors.length) {
+    const teams = [...new Set(errors.flatMap((e) => /^teams\.([a-z]+)\.roles$/.exec(e.path)?.[1] ?? []))];
+    const signals = [...new Set(errors.filter((e) => e.path.startsWith("signalRoles.")).map((e) => e.path))];
+    const hints = [
+      teams.length ? `Unset ${teams.map((t) => `teams.${t}`).join(" and ")} first.` : "",
+      signals.length ? `Remove the role from ${signals.join(" and ")} first.` : "",
+    ].filter(Boolean);
+    const hint = hints.length ? ` ${hints.join(" ")}` : "";
+    return bad(`Cannot unset "${path}": ${errors.map((e) => `${e.path}: ${e.message}`).join("; ")}.${hint}`);
+  }
+  const fallsBack = getIn(defaults, parts) !== undefined;
+  return { overrides: nextOverrides, policy, path, before: "overridden", after: fallsBack ? "default" : "removed" };
 }

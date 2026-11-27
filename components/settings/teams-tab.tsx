@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useRpc } from "@get-bb/plugin-sdk/app";
+import type { SubagentSettingsDto, rpcContract } from "@/lib/contract";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +12,7 @@ import { ChangedMark, IconButton, IssueList, NumberInput, Section, SectionReset 
 import { describeResolution, resolveModelClient, STANDARD_EFFORTS, type ModelInfo } from "./gear-resolve";
 import { ModelPicker } from "./gears-tab";
 import type { Policy } from "@/lib/policy";
+import { parseCapInput, providerOptions, TIER_OPTIONS } from "./subagent-options";
 import { delAt, getAt, isChanged, issuesUnder, TIER_ORDER, type TierName } from "./helpers";
 
 interface RoleSpec { model: string; effort?: string; serviceTier?: string; providerId?: string; effortMediumUp?: string }
@@ -242,6 +245,130 @@ function RoleSection({ role }: { role: string }) {
   );
 }
 
+type SubagentState = { phase: "loading" } | { phase: "error"; message: string } | { phase: "ready"; values: SubagentSettingsDto };
+const errorText = (e: unknown) => (e instanceof Error && e.message ? e.message : "Something went wrong. Try again.");
+
+/**
+ * Sub-agents on another provider. These are plugin settings (not part of the policy draft), so each change is saved
+ * at once and the server answers with the values it now holds, including whether the provider can be used.
+ */
+function SubagentProviderSection() {
+  const { providers } = useEditor();
+  const rpc = useRpc<typeof rpcContract>();
+  const ids = { provider: useId(), tiers: useId(), cap: useId() };
+  const [state, setState] = useState<SubagentState>({ phase: "loading" });
+  const [saving, setSaving] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [capText, setCapText] = useState("0");
+  const alive = useRef(true);
+  const seq = useRef(0); // a read that started before a newer read or write is dropped
+  const capDirty = useRef(false);
+  const savingNow = useRef(false);
+  const load = useCallback(() => {
+    if (savingNow.current) return;
+    const mine = ++seq.current;
+    rpc.call("subagentSettings", null).then(
+      (values) => {
+        if (!alive.current || mine !== seq.current) return;
+        setState({ phase: "ready", values });
+        if (!capDirty.current) setCapText(String(values.budgetCap));
+      },
+      (e) => { if (alive.current && mine === seq.current) setState((cur) => (cur.phase === "ready" ? cur : { phase: "error", message: errorText(e) })); },
+    );
+  }, [rpc]);
+  // The settings can change outside this editor (the plugin settings page, bb plugin config): read again on mount, on open and on window focus.
+  useEffect(() => {
+    alive.current = true;
+    load();
+    window.addEventListener("focus", load);
+    return () => { alive.current = false; window.removeEventListener("focus", load); };
+  }, [load]);
+
+  const save = async (patch: { provider?: string; tiers?: SubagentSettingsDto["tiers"]; budgetCap?: number }) => {
+    setSaving(true);
+    savingNow.current = true;
+    seq.current++;
+    setProblem(null);
+    try {
+      const values = await rpc.call("setSubagentSettings", patch);
+      if (!alive.current) return;
+      setState({ phase: "ready", values });
+      capDirty.current = false;
+      setCapText(String(values.budgetCap));
+    } catch (e) {
+      if (alive.current) setProblem(errorText(e));
+    } finally {
+      savingNow.current = false;
+      if (alive.current) setSaving(false);
+    }
+  };
+  const saveCap = () => {
+    if (state.phase !== "ready") return;
+    const parsed = parseCapInput(capText);
+    if ("error" in parsed) { setProblem(parsed.error); return; }
+    if (parsed.value !== state.values.budgetCap) void save({ budgetCap: parsed.value });
+    else { setProblem(null); capDirty.current = false; setCapText(String(parsed.value)); }
+  };
+
+  const values = state.phase === "ready" ? state.values : null;
+  const options = providerOptions(providers, values?.provider ?? "");
+  const off = values === null || values.provider === "";
+  return (
+    <Section
+      title="Sub-agents on another provider"
+      description="Run the implement, qa and verify sub-agents on another provider's default model, for example a local model, while the lead stays where it is."
+      defaultOpen={false}
+      onToggle={(open) => { if (open) load(); }}
+      count={<span className="text-xs font-normal text-muted-foreground">{values ? `${off ? "same as lead" : options.find((o) => o.value === values.provider)?.label ?? values.provider} · ` : ""}Saved at once — not part of Save</span>}
+    >
+      {state.phase === "loading" ? <p className="text-xs text-muted-foreground">Loading…</p> : null}
+      {state.phase === "error" ? <p role="alert" className="text-xs text-destructive">Could not load the sub-agent settings: {state.message}</p> : null}
+      {values ? (
+        <>
+          <label htmlFor={ids.provider} className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">Provider</span>
+            <Select id={ids.provider} value={values.provider} disabled={saving} onChange={(e) => void save({ provider: e.target.value })}>
+              {options.map((o) => <option key={o.value || "same"} value={o.value} disabled={o.disabled}>{o.label}</option>)}
+            </Select>
+          </label>
+          {values.usable === false ? (
+            <p role="alert" className="text-xs text-destructive">
+              This provider is not installed, is switched off, or lists no models, so sub-agents stay on the lead's provider until it works.
+            </p>
+          ) : null}
+          {values.usable === null ? (
+            <p role="status" className="text-xs text-muted-foreground">Could not check this provider yet. The setting is kept and applies until a check finds a problem.</p>
+          ) : null}
+          <label htmlFor={ids.tiers} className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">Applies to</span>
+            <Select id={ids.tiers} value={values.tiers} disabled={saving || off} onChange={(e) => void save({ tiers: e.target.value as SubagentSettingsDto["tiers"] })}>
+              {TIER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </Select>
+          </label>
+          <label htmlFor={ids.cap} className="flex flex-col gap-1 text-sm">
+            <span className="font-medium">Budget cap in tokens (0 = no cap)</span>
+            <Input
+              id={ids.cap}
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              className="h-8 text-sm"
+              value={capText}
+              disabled={saving || off}
+              onChange={(e) => { capDirty.current = true; setCapText(e.target.value); }}
+              onBlur={saveCap}
+              onKeyDown={(e) => { if (e.key === "Enter") saveCap(); }}
+            />
+            <span className="text-xs text-muted-foreground">Clamps the budget of the sub-agent roles that move, for example to fit a local model's context window.</span>
+          </label>
+          {problem ? <p role="alert" className="text-xs text-destructive">{problem}</p> : null}
+        </>
+      ) : null}
+    </Section>
+  );
+}
+
 export function TeamsTab() {
   const { draft } = useEditor();
   return (
@@ -257,6 +384,9 @@ export function TeamsTab() {
       <h3 className="mt-2 text-sm font-medium">Roles</h3>
       {Object.keys(draft.roles).map((r) => <RoleSection key={r} role={r} />)}
       <AddRole />
+      <hr className="my-2 border-border" />
+      <h3 className="text-sm font-medium">Sub-agent provider</h3>
+      <SubagentProviderSection />
     </div>
   );
 }

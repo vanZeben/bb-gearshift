@@ -169,9 +169,15 @@ knob is a form control.
 | `holdAboveTokens` | number (int ≥ 0) | 60000 | Don't downshift threads above this many context tokens (0 = never hold) |
 | `holdEffortFollowsMessage` | boolean | true | Lower the effort of held messages to their own size |
 | `downshiftBias` | boolean | true | Lean to the lower tier on borderline messages |
+| `subagentProvider` | string | "" | Sub-agent provider (blank = same as lead) |
+| `subagentTiers` | select: `small-medium`, `all` | small-medium | Sub-agent provider applies to |
+| `subagentBudgetCap` | number (int ≥ 0) | 0 | Sub-agent budget cap in tokens (0 = no cap) |
 | `retentionDays` | number (int 1–3650) | 90 | Days of history kept |
 
-The effective policy's `routing` section is built from these settings at runtime.
+The effective policy's `routing` section is built from these settings at runtime. The three `subagent*` settings
+are applied by `lib/subagent-provider.ts` to the policy that routing uses (not to the one the editor shows):
+see [Sub-agents on another provider](routing-policy.md#sub-agents-on-another-provider).
+The Teams tab edits the same three settings through the `subagentSettings` and `setSubagentSettings` RPC methods (below). `parseSubagentUpdate` (in `lib/subagent-provider.ts`) validates a write on the server: provider is a string (trimmed, at most 200 characters), tiers is one of the two values, the cap is an integer of 0 or more. `usable` is false when `refreshProviders` found the provider missing, disabled or without a default model.
 
 ### Where overrides live
 
@@ -485,7 +491,11 @@ have five or more turns. The downshift bias is re-applied from each row's score 
 confidence. `formatReplay` prints before/after tier shares, cost and holds, the turns that run
 on a lower gear after the replay, and lists what is estimated.
 `applyPolicyEdit(effective, defaults, edit)` applies one `set`, `unset`, `add-pattern` or
-`remove-pattern` edit to the effective policy, or returns an error; the CLI then diffs against
+`remove-pattern` edit to the effective policy, or returns an error. `unset` of a whole override
+(`roles.<role>`, `teams.<tier>`, `gears.<providerId|*>`, `gears.<providerId>.<tier>`) goes through
+`unsetOverrideSubtree(overrides, defaults, path)` instead: it drops that part of the saved
+overrides (`removeOverridePath`), errors when nothing is overridden there, and errors, naming
+the team or the signalRoles path, when the remaining policy does not validate; the CLI then diffs against
 the defaults and saves through the same validation as the `savePolicy` RPC. The analytics
 page's **Improve my rules** button only seeds a new-thread draft (`components/review-prompt.ts`).
 
@@ -728,6 +738,10 @@ export const rpcContract = defineRpcContract({
   resetPolicy: { input: z.object({ path: z.string().nullable() }), output: policyStateSchema },
   /** Enabled providers and their models, for the policy editor's selects. Bounded to 5 s; a provider that fails reports `error`. */
   providers: { input: z.null(), output: providersSchema },
+  /** The sub-agent provider settings and whether the provider is usable now. */
+  subagentSettings: { input: z.null(), output: subagentSettingsSchema },
+  /** Validates, then writes the given keys to the plugin settings. Returns the new values. */
+  setSubagentSettings: { input: z.object({ provider, tiers, budgetCap }).partial(), output: subagentSettingsSchema },
 });
 
 export const policyErrorSchema = z.object({ path: z.string(), message: z.string() });
@@ -801,7 +815,11 @@ writes `thread_prefs` from it and deletes it.
   enabled, patterns list), component groups, question/trivial (short reply and leading acknowledgement)/continuation patterns,
   bonuses. Try a message: `preview` with the draft overrides, per provider. Local draft
   until Save (sends `diffOverrides`), inline errors by path, changed markers, per-field
-  revert, per-section reset and Reset all.
+  revert, per-section reset and Reset all. The Teams tab also has **Sub-agents on another
+  provider**: a provider select ("Same as lead", then each enabled provider; a provider whose
+  catalog failed shows as "(models unavailable)" and can still be picked; a saved id that is not
+  listed stays visible and disabled), a sizes select and a budget cap. It is not part of the draft: each
+  change calls `setSubagentSettings` at once and shows the server's `usable` verdict.
 - **Analytics page** (`app.slots.navPanel`, path `analytics`, title "Gearshift"): range
   7/30/90 days; KPI tiles (messages routed, shift rate, estimated saving vs always using
   the top gear, manual-pick rate, average hold delay); tier distribution; model mix; daily

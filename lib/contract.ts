@@ -2,6 +2,7 @@ import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { DECISIONS_CHANGED } from "./channels";
 import { policySchema } from "./policy";
+import { SUBAGENT_TIER_CHOICES } from "./subagent-provider";
 
 export const tierSchema = z.enum(["trivial", "small", "medium", "large", "xlarge"]);
 export const actionSchema = z.enum(["shift", "keep", "hold", "manual", "skip", "off"]);
@@ -155,6 +156,18 @@ export const providersSchema = z.object({
 });
 export type ProvidersDto = z.infer<typeof providersSchema>;
 
+export const subagentTiersSchema = z.enum(SUBAGENT_TIER_CHOICES);
+export const subagentSettingsSchema = z.object({
+  /** Provider id, or "" for the lead's own provider. */
+  provider: z.string(),
+  tiers: subagentTiersSchema,
+  /** Tokens, 0 = no cap. */
+  budgetCap: z.number().int().min(0),
+  /** False when the chosen provider is not listed, not enabled, or has no model catalog, so the setting is ignored. Null when it has not been checked yet or the check timed out. Always true for "". */
+  usable: z.boolean().nullable(),
+});
+export type SubagentSettingsDto = z.infer<typeof subagentSettingsSchema>;
+
 export const rpcContract = defineRpcContract({
   preview: {
     input: z.object({
@@ -183,6 +196,13 @@ export const rpcContract = defineRpcContract({
   resetPolicy: { input: z.object({ path: z.string().nullable() }), output: policyStateSchema },
   /** Enabled providers and their models, for the policy editor's selects. Bounded to 5 s; a provider that fails reports `error`. */
   providers: { input: z.null(), output: providersSchema },
+  /** The sub-agent provider settings (subagentProvider, subagentTiers, subagentBudgetCap) and whether the provider is usable now. */
+  subagentSettings: { input: z.null(), output: subagentSettingsSchema },
+  /** Validates, then writes the given keys to the plugin settings. Invalid input is rejected and nothing is written. Returns the new values. */
+  setSubagentSettings: {
+    input: z.object({ provider: z.string().optional(), tiers: subagentTiersSchema.optional(), budgetCap: z.number().int().min(0).optional() }),
+    output: subagentSettingsSchema,
+  },
 });
 
 /** Re-exported for server-side callers. The app must import it from "./channels" (this module pulls in the server SDK). */
