@@ -5,13 +5,14 @@ import { classify } from "./lib/classify";
 import { bounded } from "./lib/bounded";
 import { DECISIONS_CHANGED } from "./lib/channels";
 import { rpcContract, type PolicyStateDto, type PreviewDto, type ProvidersDto, type ThreadStateDto } from "./lib/contract";
-import { resolveGear, sizeClass, toCatalog, type CatalogModel, type Gear } from "./lib/gears";
-import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
+import { resolveGear, resolveModel, sizeClass, toCatalog, type CatalogModel, type Gear } from "./lib/gears";
+import { DEFAULT_POLICY, compilePolicy, diffOverrides, ladderFor, mergePolicy, removeOverridePath, resolvePolicy, validatePolicy, type CompiledPolicy, type Policy, type PolicyError, type PolicyOverrides } from "./lib/policy";
 import { applyPolicyEdit, POLICY_PATHS, type PolicyEdit } from "./lib/policy-edit";
 import { applyReplaySets, formatReplay, parseReplaySet, replayDecisions, type ReplaySet } from "./lib/replay";
 import { calibrate, formatCalibration, MIN_SAMPLES } from "./lib/calibrate";
 import { buildReview, formatReview, reviewThreadIds, withTitles } from "./lib/review";
 import { policyRev } from "./lib/policy-rev";
+import { applySubagentProvider, fallbackRoleName, spawnRoleName, SUBAGENT_TIER_CHOICES } from "./lib/subagent-provider";
 import { costUsd, priceFor, tierMultiplier, type Usage } from "./lib/pricing";
 import { decide, type Decision } from "./lib/router";
 import { fingerprint, Store, type DecisionRow, type NewDecision } from "./lib/store";
@@ -62,6 +63,9 @@ export default async function plugin(bb: BbPluginApi) {
     holdEffortFollowsMessage: { type: "boolean", label: "Lower the effort of held messages to their own size", description: "On a long thread Gearshift keeps the model (switching would re-read the context uncached), but a smaller message still gets its own lower effort. Claude Code sends the effort inside the conversation, so the cache stays valid on models that support per-turn effort.", default: true },
     downshiftBias: { type: "boolean", label: "Lean to the lower tier on borderline messages", description: "A message at the very bottom of its size band, or with no clear signal, runs one tier lower. Never higher, and never below trivial.", default: true },
     routeNotes: { type: "boolean", label: "Add a team note to medium and larger messages", description: "Tells the agent which sub-agent roles to spawn (gearshift_spawn), on which models, with what budgets. Invisible in the chat.", default: true },
+    subagentProvider: { type: "string", label: "Sub-agent provider (blank = same as lead)", description: "A provider id, such as one from a local-model plugin. The implement, qa and verify sub-agents run on that provider's default model instead of the lead's. Blank keeps them on the lead's provider. An id that is not installed is ignored.", default: "" },
+    subagentTiers: { type: "select", label: "Sub-agent provider applies to", description: "Which message sizes use the sub-agent provider.", options: [...SUBAGENT_TIER_CHOICES], experimental_optionLabels: { "small-medium": "Small and medium tiers", all: "All tiers" }, default: "small-medium" },
+    subagentBudgetCap: { type: "number", label: "Sub-agent budget cap in tokens (0 = no cap)", description: "Clamps the budget of the sub-agent roles moved to the sub-agent provider, for example to fit a local model's context window. Other roles keep their budgets.", default: 0, experimental_schema: z.number().int().min(0) },
     retentionDays: { type: "number", label: "Days of history kept", description: "Routing decisions older than this are deleted.", default: 90, experimental_schema: z.number().int().min(1).max(3650) },
   });
   let cfg = await settings.get();
@@ -71,6 +75,7 @@ export default async function plugin(bb: BbPluginApi) {
   let overrides: PolicyOverrides = {};
   let policyErrors: PolicyError[] = [];
   let compiled: CompiledPolicy = compilePolicy(DEFAULT_POLICY);
+  let editable: Policy = DEFAULT_POLICY;
   const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
   /** Splits off the keys the editor may not set, with one error per stripped path. */
   const stripLocked = (o: Record<string, unknown>): { clean: PolicyOverrides; errors: PolicyError[] } => {
@@ -91,11 +96,26 @@ export default async function plugin(bb: BbPluginApi) {
     holdEffortFollowsMessage: c.holdEffortFollowsMessage ?? DEFAULT_POLICY.routing.holdEffortFollowsMessage,
     downshiftBias: c.downshiftBias ?? DEFAULT_POLICY.routing.downshiftBias,
   });
-  /** Overrides on top of the defaults, with the routing section taken from the settings. Null when it does not compile. */
-  const build = (o: PolicyOverrides): { compiled: CompiledPolicy; errors: PolicyError[] } => {
+  /** Provider ids that are set up, once known. Null until the first lookup answers: the sub-agent setting is trusted until then. */
+  let installedProviders: string[] | null = null;
+  /**
+   * Overrides on top of the defaults, with the routing section taken from the settings. `editable` is that policy as the
+   * editor shows it; `compiled` is what routing uses, which also has the sub-agent provider settings applied.
+   * Not applied when the result would not validate (fail open to the plain policy).
+   */
+  const build = (o: PolicyOverrides): { compiled: CompiledPolicy; editable: Policy; errors: PolicyError[] } => {
     const { effective, errors } = resolvePolicy(stripLocked(o).clean);
-    try { return { compiled: compilePolicy({ ...effective, routing: routingFromSettings(cfg) }), errors }; }
-    catch (e) { return { compiled: compilePolicy({ ...DEFAULT_POLICY, routing: routingFromSettings(cfg) }), errors: [...errors, { path: "policy", message: String(e) }] }; }
+    const finish = (base: Policy) => {
+      const routed = applySubagentProvider(base, cfg, installedProviders);
+      if (routed !== base) {
+        const bad = validatePolicy(routed);
+        if (bad.length === 0) return { compiled: compilePolicy(routed), editable: base };
+        bb.log.warn(`sub-agent provider setting not applied: ${bad[0]!.path}: ${bad[0]!.message}`);
+      }
+      return { compiled: compilePolicy(base), editable: base };
+    };
+    try { return { ...finish({ ...effective, routing: routingFromSettings(cfg) }), errors }; }
+    catch (e) { return { ...finish({ ...DEFAULT_POLICY, routing: routingFromSettings(cfg) }), errors: [...errors, { path: "policy", message: String(e) }] }; }
   };
   /** The effective policy's fingerprint (stamped on every decision) and when it last changed. */
   let rev = { rev: "", changedAt: null as number | null };
@@ -113,19 +133,48 @@ export default async function plugin(bb: BbPluginApi) {
   };
   const rebuild = () => {
     const r = build(overrides);
-    compiled = r.compiled; policyErrors = r.errors;
+    compiled = r.compiled; editable = r.editable; policyErrors = r.errors;
     const next = policyRev(compiled.policy);
     if (next !== rev.rev) { const prev = rev.changedAt; rev = { rev: next, changedAt: prev }; stamping = stamping.then(stampPolicy(next, prev)); }
     if (policyErrors.length) bb.log.warn(`invalid saved policy, routing with defaults: ${policyErrors[0]!.path}: ${policyErrors[0]!.message}`);
+  };
+  /** The sub-agent provider is known to be unusable (the setting is then ignored). */
+  const providerMissing = () => { const id = cfg.subagentProvider?.trim(); return !!id && !!installedProviders && !installedProviders.includes(id); };
+  /** Older hosts have no provider list: the setting is then trusted, and nothing is polled. */
+  const canListProviders = typeof bb.sdk.providers.list === "function";
+  /**
+   * Check that the sub-agent provider is listed, enabled and has a catalog with a default model; rebuild when that
+   * changes whether the setting applies. A lookup that fails or times out changes nothing. Never throws.
+   */
+  const refreshProviders = async () => {
+    try {
+      const id = cfg.subagentProvider?.trim();
+      if (!id) return;
+      const list = await bounded(bb.sdk.providers.list(), PROVIDER_MS, null);
+      if (!list) return;
+      let usable = false;
+      if (list.some((p) => p.id === id && (!("enabled" in p) || p.enabled !== false))) {
+        const cat = await bounded(catalogFor({ providerId: id }), PROVIDER_MS, null);
+        usable = !!cat && !!resolveModel("@default", cat);
+      }
+      if (cfg.subagentProvider?.trim() !== id) return; // the setting changed while we looked
+      const was = providerMissing();
+      installedProviders = usable ? [id] : [];
+      if (was !== providerMissing()) rebuild();
+    } catch (e) { bb.log.warn(`could not check the sub-agent provider: ${String(e)}`); }
   };
   try {
     const saved = await bb.storage.kv.get<unknown>(POLICY_KEY);
     overrides = isObj(saved) ? stripLocked(saved).clean : {};
   } catch (e) { bb.log.warn(`could not read saved policy: ${String(e)}`); }
   rebuild();
-  settings.onChange((next) => { cfg = next; rebuild(); });
+  settings.onChange((next) => {
+    if (next.subagentProvider?.trim() !== cfg.subagentProvider?.trim()) installedProviders = null; // trust the new id until it is checked
+    cfg = next; rebuild();
+    if (canListProviders) void refreshProviders();
+  });
   const policyState = (ok = true, extra: PolicyError[] = []): PolicyStateDto => ({
-    ok: ok && policyErrors.length === 0, defaults: DEFAULT_POLICY, overrides, effective: compiled.policy, errors: [...extra, ...policyErrors],
+    ok: ok && policyErrors.length === 0, defaults: DEFAULT_POLICY, overrides, effective: editable, errors: [...extra, ...policyErrors],
   });
 
   const store = Store.migrate(bb.storage.database(), (db, s) => bb.storage.migrate(db, s));
@@ -180,6 +229,11 @@ export default async function plugin(bb: BbPluginApi) {
       if (models.length) { catalogCache.set(key, { at: Date.now(), models }); return models; }
     } catch { /* fall through */ }
     return null;
+  }
+  if (canListProviders) {
+    void refreshProviders();
+    const providerTimer = setInterval(() => void refreshProviders(), CATALOG_TTL);
+    bb.onDispose(() => clearInterval(providerTimer));
   }
 
   async function currentGear(threadId: string, pending: boolean) {
@@ -342,7 +396,7 @@ export default async function plugin(bb: BbPluginApi) {
     } catch (e) { bb.log.warn(`route note failed: ${String(e)}`); return null; }
   }
 
-  interface SpawnResult { ok: true; childThreadId: string; role: string; providerId: string; label: string; effort: string | null; budget: number; tier: Tier }
+  interface SpawnResult { ok: true; childThreadId: string; role: string; providerId: string; label: string; effort: string | null; budget: number; tier: Tier; /** The derived role that had no model, when the base role ran instead. */ fallback: string | null }
   const fail = (error: string) => ({ ok: false as const, error });
   async function spawnRole(parentThreadId: string, roleName: string, prompt: string, title?: string): Promise<SpawnResult | { ok: false; error: string }> {
     let pending: (typeof pendingSpawns)[number] | null = null;
@@ -354,16 +408,27 @@ export default async function plugin(bb: BbPluginApi) {
       if (openAll() >= MAX_RUNS_GLOBAL) return fail(`Too many open sub-agents overall (limit ${MAX_RUNS_GLOBAL}): wait for some to finish`);
       const parent = await bb.sdk.threads.get({ threadId: parentThreadId });
       const tier = (store.lastNoteworthyTier(parentThreadId) as Tier | null) ?? "medium";
-      const target = roleTarget(compiled.policy, roleName, parent.providerId, tier);
       const allowed = [...compiled.policy.teams[tier].roles, ...store.lastSignalRoles(parentThreadId)];
-      if (target && !allowed.includes(roleName)) return fail(`Role "${roleName}" is not in this message's team. Roles: ${[...new Set(allowed)].join(", ")}`);
+      const wanted = spawnRoleName(roleName, allowed, editable);
+      let target = roleTarget(compiled.policy, wanted, parent.providerId, tier);
+      if (target && !allowed.includes(wanted)) return fail(`Role "${roleName}" is not in this message's team. Roles: ${[...new Set(allowed)].join(", ")}`);
       if (!target) return fail(`Unknown role "${roleName}". Roles: ${Object.keys(compiled.policy.roles).join(", ")}`);
       const hostId = (parent as { hostId?: string | null }).hostId ?? null;
-      const catalog = await catalogFor({ providerId: target.providerId, ...(target.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), hostId, projectId: parent.projectId });
-      const r = catalog ? resolveRole(compiled.policy, roleName, parent.providerId, tier, new Map([[target.providerId, catalog]])) : null;
-      if (!r?.gear) return fail(`No model for role "${roleName}" on ${target.providerId}`);
+      const gearFor = async (t: NonNullable<typeof target>) => {
+        const catalog = await bounded(catalogFor({ providerId: t.providerId, ...(t.providerId === parent.providerId ? { environmentId: parent.environmentId } : {}), hostId, projectId: parent.projectId }), PROVIDER_MS, null);
+        return catalog ? resolveRole(compiled.policy, t.role, parent.providerId, tier, new Map([[t.providerId, catalog]]))?.gear ?? null : null;
+      };
+      let g = await gearFor(target);
+      let fallback: string | null = null;
+      const base = g ? null : fallbackRoleName(wanted, editable);
+      if (base) { // fail open: the sub-agent provider has no model now, so run the base role on the lead's provider with its own budget
+        const baseTarget = roleTarget(compiled.policy, base, parent.providerId, tier);
+        const baseGear = baseTarget ? await gearFor(baseTarget) : null;
+        if (baseTarget && baseGear) { fallback = wanted; target = baseTarget; g = baseGear; }
+      }
+      if (!g) return fail(`No model for role "${target.role}" on ${target.providerId}`);
       if (!parent.environmentId) return fail("The calling thread has no environment yet");
-      const g = r.gear;
+      const spawned = target.role;
       // Re-check after the awaits, then reserve the slot (no await in between).
       if (openFor(parentThreadId) >= MAX_RUNS_PER_PARENT || openAll() >= MAX_RUNS_GLOBAL) return fail("Too many open sub-agents: wait for one to report back");
       pending = { parentThreadId, model: g.model, at: Date.now() };
@@ -372,15 +437,15 @@ export default async function plugin(bb: BbPluginApi) {
         projectId: parent.projectId, environment: { type: "reuse", environmentId: parent.environmentId }, parentThreadId,
         providerId: target.providerId, model: g.model, ...(g.effort ? { reasoningLevel: g.effort } : {}), ...(g.serviceTier ? { serviceTier: g.serviceTier } : {}),
         executionInputSources: { providerId: "explicit", model: "explicit", ...(g.effort ? { reasoningLevel: "explicit" as const } : {}), ...(g.serviceTier ? { serviceTier: "explicit" as const } : {}) },
-        title: title ?? `${roleName}`, prompt,
+        title: title ?? spawned, prompt,
       } as never);
-      store.insertRun({ parent_thread_id: parentThreadId, child_thread_id: child.id, role: roleName, tier, provider: target.providerId, model: g.model, model_label: g.label, effort: g.effort, budget: target.budget, started_at: Date.now() });
+      store.insertRun({ parent_thread_id: parentThreadId, child_thread_id: child.id, role: spawned, tier, provider: target.providerId, model: g.model, model_label: g.label, effort: g.effort, budget: target.budget, started_at: Date.now() });
       changed(parentThreadId);
-      return { ok: true, childThreadId: child.id, role: roleName, providerId: target.providerId, label: g.label, effort: g.effort, budget: target.budget, tier };
+      return { ok: true, childThreadId: child.id, role: spawned, providerId: target.providerId, label: g.label, effort: g.effort, budget: target.budget, tier, fallback };
     } catch (e) { return fail(e instanceof Error ? e.message : String(e)); }
     finally { if (pending) { const i = pendingSpawns.indexOf(pending); if (i >= 0) pendingSpawns.splice(i, 1); } }
   }
-  const spawnText = (r: SpawnResult) => `Spawned ${r.role} sub-agent: thread ${r.childThreadId} on ${gearLabel({ model: "", label: r.label, effort: r.effort, serviceTier: null }, r.label)} (${r.providerId}), budget ${formatBudget(r.budget)} tokens. It reports back to you when done.`;
+  const spawnText = (r: SpawnResult) => `Spawned ${r.role} sub-agent: thread ${r.childThreadId} on ${gearLabel({ model: "", label: r.label, effort: r.effort, serviceTier: null }, r.label)} (${r.providerId}), budget ${formatBudget(r.budget)} tokens. It reports back to you when done.${r.fallback ? ` Note: ${r.fallback} had no model available, so ${r.role} ran on the lead's provider instead.` : ""}`;
 
   bb.agents.registerTool({
     name: "gearshift_spawn",
@@ -773,11 +838,11 @@ export default async function plugin(bb: BbPluginApi) {
           const history = store.since(now - (days + HISTORY_EXTRA_DAYS) * DAY);
           if (cmd === "review" && !argv.includes("--replay")) {
             if (sets.length) return { exitCode: 1, stderr: "--set needs --replay (or use bb gearshift replay)" };
-            const built = buildReview(history, compiled.policy, { days, now, policyRev: currentRev(), policyChangedAt: rev.changedAt });
+            const built = buildReview(history, editable, { days, now, policyRev: currentRev(), policyChangedAt: rev.changedAt });
             const review = withTitles(built, await threadTitles(reviewThreadIds(built)));
             return { exitCode: 0, stdout: json ? JSON.stringify(review, null, 2) : formatReview(review) };
           }
-          const applied = applyReplaySets(compiled.policy, { ...DEFAULT_POLICY, routing: compiled.policy.routing }, sets);
+          const applied = applyReplaySets(editable, { ...DEFAULT_POLICY, routing: editable.routing }, sets);
           if ("error" in applied) return { exitCode: 1, stderr: applied.error };
           const providers = [...new Set(history.filter((r) => r.at >= now - days * DAY).map((r) => r.provider_id))];
           const catalogs: Record<string, CatalogModel[] | null> = {};
@@ -836,7 +901,9 @@ export default async function plugin(bb: BbPluginApi) {
             if (!saved.ok) return { exitCode: 1, stderr: `Not saved: ${saved.errors.map((e) => `${e.path}: ${e.message}`).join("; ") || "unknown error"}` };
             return { exitCode: 0, stdout: `${r.path}: ${r.before} → ${r.after}` };
           }
-          const lines = [JSON.stringify(compiled.policy, null, 2)];
+          const lines = [JSON.stringify(editable, null, 2)];
+          const derived = Object.keys(compiled.policy.roles).filter((r) => !(r in editable.roles));
+          if (derived.length) lines.push(`# Roles added by the sub-agent provider settings, not part of the policy above: ${derived.join(", ")}`);
           if (policyErrors.length) lines.push(`# Saved policy is invalid, routing with defaults: ${policyErrors.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
           return { exitCode: 0, stdout: lines.join("\n") };
         }

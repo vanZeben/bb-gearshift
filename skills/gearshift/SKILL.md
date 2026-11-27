@@ -24,7 +24,7 @@ By default the lead (you, the main thread) stays on the capable model at every t
 | `bb gearshift replay [--days N] [--set path=value]... [--json]` | Re-run stored decisions under the current policy or with edits (`tiers.*`, gears, `routing.holdAboveTokens`, `routing.holdEffortFollowsMessage`) and compare tiers, holds and estimated cost. Changes nothing. |
 | `bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]` | Per tier, find the cheapest gear that kept good outcomes in past turns and propose it (with `--apply`, save it). Downshift only: never proposes a heavier model or effort. |
 | `bb gearshift policy set\|unset\|add-pattern\|remove-pattern ...` | Edit one saved policy value; validated like the editor's Save. |
-| `bb plugin config gearshift set <key> <value>` | Change a setting: `enabled`, `defaultOn`, `respectManualPicks`, `routeAgentMessages`, `holdAboveTokens`, `routeNotes`, `retentionDays`. |
+| `bb plugin config gearshift set <key> <value>` | Change a setting: `enabled`, `defaultOn`, `respectManualPicks`, `routeAgentMessages`, `holdAboveTokens`, `routeNotes`, `subagentProvider`, `subagentTiers`, `subagentBudgetCap`, `retentionDays`. |
 
 ## Review and tune routing
 

@@ -8,6 +8,8 @@ All notable changes to Gearshift are recorded here. The format follows
 
 ### Added
 
+- **Run sub-agents on another provider.** Three plain settings: **Sub-agent provider** (`subagentProvider`, blank = same as lead), **Sub-agent provider applies to** (`subagentTiers`: small and medium, or all) and **Sub-agent budget cap** (`subagentBudgetCap`, 0 = no cap). With a provider set, the `implement`, `qa` and `verify` sub-agents of the chosen tiers run on that provider's default model, with budgets clamped to the cap, so a lead on a cloud provider can fan the building out to a local model without hand-written role overrides. With the defaults, or with a provider that is not installed, nothing changes. Provider id is a text field, not a dropdown, because a bb settings dropdown has a fixed list of options and cannot follow the providers that are installed.
+
 - `bb gearshift calibrate [--days N] [--min-samples N] [--json] [--apply]`: trace-driven, downshift-only calibration. Per provider and scored tier, it finds the cheapest gear that kept good outcomes in your history (a turn is bad when the message was re-sent or a heavier model was hand-picked right after it) and proposes it for that tier, with a `replay --set` line to check it; `--apply` saves it. It never proposes a heavier model or effort, keeps large and x-large at medium effort or more, and reports tiers whose gear looks too small instead of changing them. Each run is logged to a new `calibrations` table. Idea adapted from OpenJarvis's TraceDrivenPolicy (Apache-2.0).
 
 ### Changed

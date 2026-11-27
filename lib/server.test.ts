@@ -15,7 +15,7 @@ const sdkModels = CLAUDE_CATALOG.map((m) => ({
   supportedServiceTiers: m.serviceTiers.map((id) => ({ id })),
 }));
 
-interface Opts { settings?: Record<string, boolean | number>; models?: (a: Record<string, unknown>) => Promise<unknown>; defaults?: () => Promise<unknown>; threads?: Record<string, unknown>; hosts?: unknown[] }
+interface Opts { settings?: Record<string, boolean | number | string>; models?: (a: Record<string, unknown>) => Promise<unknown>; defaults?: () => Promise<unknown>; threads?: Record<string, unknown>; hosts?: unknown[]; providerList?: unknown[] | (() => Promise<unknown>) }
 
 async function setup(o: Opts = {}) {
   // In-memory queue model: rows the plugin can list and amend.
@@ -30,7 +30,7 @@ async function setup(o: Opts = {}) {
     pluginId: "gearshift", agentSkillIds: ["gearshift"],
     ...(o.settings ? { settings: o.settings } : {}),
     sdk: {
-      providers: { models: o.models ?? (async () => ({ models: sdkModels })) },
+      providers: { models: o.models ?? (async () => ({ models: sdkModels })), ...(o.providerList ? { list: typeof o.providerList === "function" ? o.providerList : async () => o.providerList } : {}) },
       ...(o.hosts ? { hosts: { list: async () => o.hosts } } : {}),
       threads: {
         defaultExecutionOptions: o.defaults ?? (async () => ({ model: "claude-opus-5-5", reasoningLevel: "high", serviceTier: null })),
@@ -490,6 +490,174 @@ describe("budget guard", () => {
     await g.emit("other-thread");
     expect(g.send).not.toHaveBeenCalled();
     expect(g.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe("sub-agent provider settings", () => {
+  const LARGE = "port the billing service into a plugin"; // scores 9, the bottom of large (set downshiftBias false to keep it there)
+  const thread = () => makeThreadResponse({ id: T, providerId: PROVIDER, environmentId: "env1", projectId: "p1" } as never);
+  const codexModels = CODEX_CATALOG.map((m) => ({ id: m.id, displayName: m.displayName, isDefault: m.isDefault, supportedReasoningEfforts: m.efforts.map((reasoningEffort) => ({ reasoningEffort })), supportedServiceTiers: [] }));
+  const forCodex = (codex: (a: Record<string, unknown>) => Promise<unknown>) => async (a: Record<string, unknown>) => (a.providerId === "codex" ? codex(a) : { models: sdkModels });
+  const codexOk = forCodex(async () => ({ models: codexModels }));
+  async function withSettings(settings?: Record<string, boolean | number | string>, providerList?: unknown[] | (() => Promise<unknown>), models: (a: Record<string, unknown>) => Promise<unknown> = codexOk, text = MEDIUM) {
+    const spawn = vi.fn(async (a: Record<string, unknown>) => ({ id: `child-${spawn.mock.calls.length}`, ...a }));
+    const s = await setup({ models, threads: { get: async () => thread(), spawn }, ...(settings ? { settings } : {}), ...(providerList ? { providerList } : {}) });
+    await s.hook(s.ctx(text));
+    const state = () => s.harness.behavior.callRpc("getPolicy", null) as Promise<{ effective: { roles: Record<string, unknown>; teams: Record<string, { roles: string[] }> } }>;
+    const spawnRole = async (role: string) => JSON.stringify(await s.harness.behavior.callAgentTool("gearshift_spawn", { role, prompt: "x" }, { threadId: T } as never));
+    const noteText = async () => { const r = s.row("q1", text); await s.queued(r); await s.flush(); return noteBlocks(s.queue.get("q1"))[0]?.text ?? ""; };
+    return { ...s, spawn, state, spawnRole, noteText };
+  }
+  const runs = (s: { db: { prepare: (q: string) => { all: () => unknown[] } } }) => s.db.prepare("SELECT role, provider, budget FROM runs").all();
+
+  it("with the defaults, leaves the team and the editor's policy as they were", async () => {
+    const s = await withSettings();
+    const { effective } = await s.state();
+    expect(effective.roles).not.toHaveProperty("qa-sub");
+    expect(effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+    expect(await s.spawnRole("qa")).toMatch(/Spawned qa/);
+    expect(s.spawn.mock.calls[0]![0]).toMatchObject({ providerId: PROVIDER });
+  });
+
+  it("spawns the moved role on the sub-agent provider's default model with the capped budget", async () => {
+    const s = await withSettings({ subagentProvider: "codex", subagentBudgetCap: 64_000 });
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub sub-agent/);
+    expect(s.spawn.mock.calls[0]![0]).toMatchObject({ providerId: "codex", model: CODEX_CATALOG.find((m) => m.isDefault)!.id });
+    expect(runs(s)).toEqual([{ role: "qa-sub", provider: "codex", budget: 64_000 }]);
+  });
+
+  it("accepts the base role name while its -sub role is in the team", async () => {
+    const s = await withSettings({ subagentProvider: "codex", subagentBudgetCap: 64_000 });
+    const res = await s.spawnRole("qa");
+    expect(res).toMatch(/Spawned qa-sub sub-agent/);
+    expect(res).not.toMatch(/Note:/);
+    expect(runs(s)).toEqual([{ role: "qa-sub", provider: "codex", budget: 64_000 }]);
+    expect(await s.spawnRole("architecture")).toMatch(/not in this message's team/);
+  });
+
+  it("keeps the derived roles out of the policy the editor saves", async () => {
+    const s = await withSettings({ subagentProvider: "codex" });
+    const { effective } = await s.state();
+    expect(effective.roles).not.toHaveProperty("qa-sub");
+    expect(effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+  });
+
+  it("prints the editable policy from the CLI with a footer that lists the derived roles", async () => {
+    const s = await withSettings({ subagentProvider: "codex" });
+    const run = s.harness.inspection.registrations.cli!.run as unknown as (argv: string[], ctx: Record<string, unknown>) => Promise<{ stdout?: string }>;
+    const out = (await run(["policy"], {})).stdout!;
+    const [json, footer] = out.split(/\n(?=# )/);
+    expect(Object.keys(JSON.parse(json!).roles)).not.toContain("qa-sub");
+    expect(footer).toMatch(/implement-sub, qa-sub, verify-sub/);
+    const plain = await withSettings();
+    const plainRun = plain.harness.inspection.registrations.cli!.run as unknown as typeof run;
+    expect((await plainRun(["policy"], {})).stdout).not.toMatch(/^# Roles added/m);
+  });
+
+  it("ignores a provider that the host does not list, and uses one it does", async () => {
+    const ghost = await withSettings({ subagentProvider: "ghost" }, [{ id: PROVIDER }, { id: "codex" }]);
+    await ghost.flush();
+    expect((await ghost.state()).effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+    expect(await ghost.spawnRole("qa-sub")).toMatch(/Unknown role .{1,3}qa-sub/);
+    expect(await ghost.spawnRole("qa")).toMatch(/Spawned qa/);
+    const real = await withSettings({ subagentProvider: "codex" }, [{ id: PROVIDER }, { id: "codex" }]);
+    await real.flush();
+    expect(await real.spawnRole("qa-sub")).toMatch(/Spawned qa-sub/);
+  });
+
+  it("ignores a listed provider whose catalog has no default model", async () => {
+    const s = await withSettings({ subagentProvider: "codex" }, [{ id: PROVIDER }, { id: "codex" }], forCodex(async () => ({ models: [] })));
+    await s.flush();
+    expect((await s.state()).effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+    expect(await s.spawnRole("qa")).toMatch(/Spawned qa sub-agent/);
+    expect(runs(s)).toEqual([{ role: "qa", provider: PROVIDER, budget: 120_000 }]);
+  });
+
+  describe("fails open when the sub-agent provider has no model at spawn time", () => {
+    // No provider list in these hosts, so the setting is trusted and the derived role is in the team.
+    const check = async (s: Awaited<ReturnType<typeof withSettings>>, res: string) => {
+      expect(res).toMatch(/Spawned qa sub-agent/);
+      expect(res).toMatch(/qa-sub had no model available, so qa ran on the lead's provider/);
+      expect(s.spawn.mock.calls[0]![0]).toMatchObject({ providerId: PROVIDER, model: "claude-haiku-5-5" });
+      expect(runs(s)).toEqual([{ role: "qa", provider: PROVIDER, budget: 120_000 }]); // the base role's budget, not the cap
+    };
+    it("when the catalog is empty", async () => {
+      const s = await withSettings({ subagentProvider: "codex", subagentBudgetCap: 64_000 }, undefined, forCodex(async () => ({ models: [] })));
+      await check(s, await s.spawnRole("qa-sub"));
+    });
+    it("when the catalog lookup throws, asked for by the base name", async () => {
+      const s = await withSettings({ subagentProvider: "codex", subagentBudgetCap: 64_000 }, undefined, forCodex(async () => { throw new Error("provider down"); }));
+      await check(s, await s.spawnRole("qa"));
+    });
+    it("when the catalog lookup times out", async () => {
+      const pending = withSettings({ subagentProvider: "codex", subagentBudgetCap: 64_000 }, undefined, forCodex(() => new Promise(() => {})));
+      await vi.advanceTimersByTimeAsync(5000); // the first message's hook also waits on the hung catalog
+      const s = await pending;
+      const res = s.spawnRole("qa-sub");
+      await vi.advanceTimersByTimeAsync(5000);
+      await check(s, await res);
+    });
+  });
+
+  it("with subagentTiers all, names qa-sub with the capped budget in a large message's note and spawn", async () => {
+    const settings = { subagentProvider: "codex", subagentTiers: "all", subagentBudgetCap: 64_000, downshiftBias: false };
+    const s = await withSettings(settings, undefined, codexOk, LARGE);
+    expect(await s.noteText()).toMatch(/tier=large.*qa-sub → .* on codex \(budget 64k\)/);
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub sub-agent/);
+    expect(runs(s)).toEqual([{ role: "qa-sub", provider: "codex", budget: 64_000 }]);
+    const small = await withSettings({ ...settings, subagentTiers: "small-medium" }, undefined, codexOk, LARGE);
+    expect(await small.noteText()).toMatch(/qa → .*\(budget 150k\)/); // large keeps the lead's provider
+  });
+
+  it("follows the settings when they change", async () => {
+    const s = await withSettings({}, undefined);
+    expect(await s.spawnRole("qa-sub")).toMatch(/Unknown role/);
+    await s.harness.behavior.setSettings({ subagentProvider: "codex" });
+    expect((await s.state()).effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub/);
+    await s.harness.behavior.setSettings({ subagentProvider: null });
+    expect(await s.spawnRole("qa-sub")).toMatch(/Unknown role/);
+  });
+
+  it("trusts a new provider id at once instead of keeping the old provider check", async () => {
+    let calls = 0;
+    const list = async () => (calls++ === 0 ? [{ id: PROVIDER }] : new Promise<never>(() => {})); // only the first lookup answers
+    const s = await withSettings({ subagentProvider: "codex" }, list);
+    await s.flush();
+    expect(await s.spawnRole("qa-sub")).toMatch(/Unknown role/); // listed without codex: ignored
+    await s.harness.behavior.setSettings({ subagentProvider: null });
+    await s.harness.behavior.setSettings({ subagentProvider: "codex" });
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub/); // the old verdict is dropped while the new lookup is pending
+  });
+
+  it("picks up a provider that appears on a later refresh", async () => {
+    const providers: Array<{ id: string }> = [{ id: PROVIDER }];
+    const s = await withSettings({ subagentProvider: "codex" }, async () => providers);
+    await s.flush();
+    expect(await s.spawnRole("qa-sub")).toMatch(/Unknown role/);
+    providers.push({ id: "codex" });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub/);
+  });
+
+  it("stops polling providers when the plugin is disposed", async () => {
+    const list = vi.fn(async () => [{ id: PROVIDER }, { id: "codex" }]);
+    const s = await withSettings({ subagentProvider: "codex" }, list);
+    await s.flush();
+    const before = list.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(list.mock.calls.length).toBe(before + 1);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    await s.harness.lifecycle.dispose();
+    expect(vi.getTimerCount()).toBe(0); // the refresh interval is gone with the rest
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    expect(list.mock.calls.length).toBe(before + 1);
+  });
+
+  it("does not poll when the host has no provider list, and trusts the setting", async () => {
+    const s = await withSettings({ subagentProvider: "codex" });
+    expect((await s.state()).effective.teams.medium!.roles).toEqual(["implement", "qa", "verify"]);
+    expect(await s.spawnRole("qa-sub")).toMatch(/Spawned qa-sub/);
   });
 });
 

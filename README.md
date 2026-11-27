@@ -87,6 +87,8 @@ On Claude Code, `implement` runs on Sonnet (medium effort, high from medium up),
 
 **Other providers.** A role can run on a different provider than the lead, for example a review on Codex while the lead runs on Claude Code. Set a provider override on the role's gear in the Teams tab.
 
+**Sub-agents on another provider.** To keep the lead on a cloud provider and run the building on another one, such as a local model, set **Sub-agent provider** to that provider's id. Choose **Small and medium tiers** or **All tiers** for the sizes it covers, and set **Sub-agent budget cap** to fit the model's context window. For the chosen tiers, the team then names `implement-sub`, `qa-sub` and `verify-sub`: copies of those roles that run on the provider's default model with the same effort and budgets, clamped to the cap. `review`, `architecture`, `research` and `explore` stay on the lead's provider. Blank means no change. If the provider is not installed, Gearshift ignores the setting. The Teams tab does not show the derived roles, and nothing you save there includes them. If you define a role with one of those names yourself, Gearshift leaves that role alone.
+
 **See and edit it.** Teams, roles, gears and budgets live in the **Teams** tab of the Routing policy editor. The analytics page has a **Sub-agents** card: lead against sub-agent spend, runs by role, how much of its budget each run used, and the most recent runs.
 
 **Turn it off.** Switch off **Add a team note to medium and larger messages** and the agent is no longer told the team or its roles, so it has nothing to orchestrate with (`bb plugin config gearshift set routeNotes false` does the same). Turning Gearshift off for a thread also stops it spawning there.
@@ -125,6 +127,9 @@ Everything is an ordinary setting in **Settings → Plugins → Gearshift**. The
 | Route messages from other agents | on | Also route messages that other agents send into a thread. |
 | Don't downshift above this many context tokens | 60,000 | Keeps long threads on their current model so their cache isn't wasted. Matters for a tiered ladder; under the default gears the model is the same at every tier. 0 turns this off. |
 | Add a team note to medium and larger messages | on | Tells the agent which sub-agent roles to spawn and on what. Off means no orchestration prompts. |
+| Sub-agent provider | blank (same as lead) | A provider id, such as a local-model plugin. When set, the `implement`, `qa` and `verify` sub-agents run on that provider's default model. An id that is not installed is ignored. See [Sub-agents on another provider](#sub-agents). |
+| Sub-agent provider applies to | Small and medium tiers | Or all tiers. |
+| Sub-agent budget cap in tokens | 0 (no cap) | Clamps the budgets of the sub-agent roles moved to the sub-agent provider, so a local model with a 64k context is not given 360k to 1.2M. Other roles keep their budgets. |
 | Days of history kept | 90 | Routing history used by the analytics page. |
 
 Below them, the **Routing policy** editor sets the gears for each provider (model, effort and service tier per tier), the scoring signals and score bands, with Gearshift's defaults filled in. Your changes sit on top of the defaults, so you keep getting improved defaults for everything you didn't change. See [the routing policy guide](docs/routing-policy.md).

@@ -169,9 +169,14 @@ knob is a form control.
 | `holdAboveTokens` | number (int ≥ 0) | 60000 | Don't downshift threads above this many context tokens (0 = never hold) |
 | `holdEffortFollowsMessage` | boolean | true | Lower the effort of held messages to their own size |
 | `downshiftBias` | boolean | true | Lean to the lower tier on borderline messages |
+| `subagentProvider` | string | "" | Sub-agent provider (blank = same as lead) |
+| `subagentTiers` | select: `small-medium`, `all` | small-medium | Sub-agent provider applies to |
+| `subagentBudgetCap` | number (int ≥ 0) | 0 | Sub-agent budget cap in tokens (0 = no cap) |
 | `retentionDays` | number (int 1–3650) | 90 | Days of history kept |
 
-The effective policy's `routing` section is built from these settings at runtime.
+The effective policy's `routing` section is built from these settings at runtime. The three `subagent*` settings
+are applied by `lib/subagent-provider.ts` to the policy that routing uses (not to the one the editor shows):
+see [Sub-agents on another provider](routing-policy.md#sub-agents-on-another-provider).
 
 ### Where overrides live
 

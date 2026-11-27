@@ -261,6 +261,22 @@ The agent can only spawn roles listed in its note: the tier's team plus any sign
 
 A role can run on a different provider than the parent (set a provider override on its gear). Edit all of this in the **Teams** tab of the Routing policy editor. Sub-agents Gearshift spawns keep the gear it gave them; they are never re-routed. [How it works](how-it-works.md#sub-agents) covers the internals: the route note, `gearshift_spawn`, the budget guard and the run report.
 
+### Sub-agents on another provider
+
+Three plugin settings move the `implement`, `qa` and `verify` roles to another provider without hand-written overrides:
+
+| Setting | Key | Default | Effect |
+|---|---|---|---|
+| Sub-agent provider | `subagentProvider` | blank | A provider id. Blank: no change. An id that is not installed: no change. |
+| Sub-agent provider applies to | `subagentTiers` | `small-medium` | `small-medium` covers the small and medium tiers. `all` covers every tier that has one of the three roles. |
+| Sub-agent budget cap | `subagentBudgetCap` | 0 | Tokens. Clamps the budget of the moved roles at every tier. 0 means no cap. It never raises a budget. |
+
+For each of the three roles that the chosen tiers use, Gearshift builds a copy named `<role>-sub` (`implement-sub`, `qa-sub`, `verify-sub`). The copy has one gear for `*` (every parent provider): the sub-agent provider's default model (`@default`), with the original role's effort and effort from medium up, and no service tier. The copy keeps the original budgets, clamped to the cap. The team of each chosen tier then lists the copy in place of the original, and the route note and `gearshift_spawn` use the copy. Other tiers, and the roles `review`, `architecture`, `research` and `explore`, are unchanged, and so are the roles' own budgets.
+
+The copies are built from the settings each time the policy is built. They are not part of the policy in the Teams tab and are never saved as overrides. A role that you named `implement-sub`, `qa-sub` or `verify-sub` yourself is left as it is, and its original role stays in the team. With the default settings the built policy is the same as without this feature. For a provider with a small context window, set the cap to fit it, for example 48000 to 64000.
+
+Gearshift uses the setting only while the provider is installed, enabled and has a default model. If the provider goes away, the copies disappear and the roles run on the lead's provider again. If a spawn finds no model for a copy, `gearshift_spawn` runs the original role on the lead's provider with its own, uncapped budget, and says so in its result. The agent may ask for the original role name (`qa`) while the copy (`qa-sub`) is in the team. The policy revision that Gearshift stamps on each decision changes whenever the setting starts or stops applying, for example when you set or clear the provider, or when the provider appears or disappears. `bb gearshift review` then reports the policy as changed.
+
 ### Tuning teams, roles and budgets
 
 All in the **Teams** tab. Budgets are in thousands of tokens.
